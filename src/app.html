@@ -1,0 +1,1421 @@
+<div id="au-dev-root" class="devtools-root ${isDarkTheme ? 'dark' : ''}">
+  <header class="devtools-header">
+    <div class="header-content">
+      <span class="header-title">Aurelia</span>
+    </div>
+  </header>
+
+  <nav class="tab-bar">
+    <button
+      repeat.for="tab of tabs"
+      class="tab-button ${activeTab === tab.id ? 'active' : ''}"
+      click.trigger="switchTab(tab.id)"
+    >
+      <span class="tab-icon">${tab.icon}</span>
+      <span class="tab-label">${tab.label}</span>
+    </button>
+  </nav>
+
+  <main class="devtools-main">
+    <!-- Main Tab - Split Pane Layout (All/Components/Attributes) -->
+    <div class="h-full flex flex-col">
+      <div class="components-split-pane">
+        <!-- Left Panel - Component Tree -->
+        <div class="components-tree-panel">
+          <div class="components-toolbar">
+            <div class="toolbar-top">
+              <button
+                if.bind="activeTab === 'all'"
+                class="toolbar-button element-picker ${isElementPickerActive ? 'active' : ''}"
+                click.trigger="toggleElementPicker()"
+                title="Select component from page"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="currentColor"
+                >
+                  <path
+                    d="M3 1L1 3l4 4-4 4 2 2 4-4 4 4 2-2-4-4 4-4L11 1 7 5 3 1z"
+                  />
+                </svg>
+                Pick
+              </button>
+              <button class="toolbar-button" click.trigger="loadAllComponents()">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="currentColor"
+                >
+                  <path d="M7 1.5L4 4.5h2v6h2v-6h2L7 1.5zm5.5 11H1.5v-1h11v1z" />
+                </svg>
+                Refresh
+              </button>
+              <span
+                class="component-count"
+                if.bind="filteredComponentTreeByTab.length"
+              >
+                ${filteredComponentTreeByTab.length}${searchQuery ? ' of ' +
+                componentTree.length : ''} ${activeTab === 'all' ? 'component' : activeTab.slice(0, -1)}${filteredComponentTreeByTab.length
+                !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div class="search-container">
+              <svg
+                class="search-icon"
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="currentColor"
+              >
+                <path
+                  d="M10 6A4 4 0 1 1 2 6a4 4 0 0 1 8 0zM6 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm4.7 2.7L13 10.4 10.4 13l-2.3-2.3"
+                />
+              </svg>
+              <input
+                class="search-input"
+                type="text"
+                placeholder="Search components..."
+                value.bind="searchQuery"
+                input.trigger="filterComponents()"
+              />
+              <button
+                class="clear-search"
+                if.bind="searchQuery"
+                click.trigger="clearSearch()"
+                title="Clear search"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 12 12"
+                  fill="currentColor"
+                >
+                  <path
+                    d="M6 4.586L9.293 1.293 10.707 2.707 7.414 6l3.293 3.293-1.414 1.414L6 7.414 2.707 10.707 1.293 9.293 4.586 6 1.293 2.707 2.707 1.293 6 4.586z"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto">
+            <div if.bind="detectionState === 'checking'" class="empty-components">
+              <div class="empty-icon">🔍</div>
+              <h3>Looking for Aurelia...</h3>
+              <p>
+                Scanning the page for Aurelia v1 or v2 applications.
+              </p>
+            </div>
+
+            <div if.bind="detectionState === 'not-found'" class="empty-components">
+              <div class="empty-icon">⚡</div>
+              <h3>No Aurelia application detected</h3>
+              <p>
+                This page does not appear to have an Aurelia v1 or v2 application running.
+                The Aurelia DevTools require an active Aurelia application to function.
+              </p>
+              <button
+                class="refresh-button"
+                click.trigger="recheckAurelia()"
+              >
+                Check Again
+              </button>
+            </div>
+
+            <div if.bind="aureliaDetected && !componentTree.length" class="empty-components">
+              <div class="empty-icon">🌲</div>
+              <h3>No Aurelia components found</h3>
+              <p>
+                Make sure the page has Aurelia components and they are properly
+                registered.
+              </p>
+              <button
+                class="refresh-button"
+                click.trigger="loadAllComponents()"
+              >
+                Refresh Components
+              </button>
+            </div>
+
+            <div
+              if.bind="aureliaDetected && componentTree.length && !filteredComponentTreeByTab.length && searchQuery"
+              class="empty-components"
+            >
+              <div class="empty-icon">🔍</div>
+              <h3>No matching components</h3>
+              <p>
+                Try a different search term or clear the search to see all
+                components.
+              </p>
+              <button class="refresh-button" click.trigger="clearSearch()">
+                Clear Search
+              </button>
+            </div>
+
+            <div class="component-tree" if.bind="aureliaDetected && filteredComponentTreeByTab.length">
+              <div
+                repeat.for="component of filteredComponentTreeByTab"
+                class="component-tree-item"
+              >
+                <div
+                  class="component-item ${selectedComponentId === component.id ? 'selected' : ''}"
+                  click.trigger="selectComponent(component.id)"
+                  mouseenter.trigger="highlightComponent(component)"
+                  mouseleave.trigger="unhighlightComponent()"
+                >
+                  <button
+                    class="expand-toggle"
+                    css="visibility: ${component.children.length ? 'visible' : 'hidden'}"
+                    click.trigger="toggleComponentExpansion(component.id)"
+                  >
+                    <svg
+                      width="8"
+                      height="8"
+                      viewBox="0 0 8 8"
+                      class="expand-icon ${component.expanded ? 'expanded' : ''}"
+                    >
+                      <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                    </svg>
+                  </button>
+                  <span class="component-icon ${component.type}">
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 12 12"
+                      fill="currentColor"
+                    >
+                      <path
+                        if.bind="component.type === 'custom-element'"
+                        d="M2 2h8v2H2V2zm0 3h8v5H2V5z"
+                      />
+                      <path
+                        if.bind="component.type === 'custom-attribute'"
+                        d="M6 1L1 6l5 5 5-5-5-5z"
+                      />
+                    </svg>
+                  </span>
+                  <span class="component-name ${component.type}"
+                    >&lt;${component.name}&gt;</span
+                  >
+                  <span
+                    if.bind="component.hasAttributes"
+                    class="component-badge"
+                    >${component.children.length}</span
+                  >
+                </div>
+
+                <div
+                  if.bind="component.expanded && component.children.length"
+                  class="component-children"
+                >
+                  <div
+                    repeat.for="child of component.children"
+                    class="component-tree-item"
+                  >
+                    <div
+                      class="component-item ${selectedComponentId === child.id ? 'selected' : ''}"
+                      click.trigger="selectComponent(child.id)"
+                      mouseenter.trigger="highlightComponent(child)"
+                      mouseleave.trigger="unhighlightComponent()"
+                    >
+                      <button class="expand-toggle" style="visibility: hidden">
+                        <!-- No expand button for leaf nodes -->
+                      </button>
+                      <span class="component-icon ${child.type}">
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="currentColor"
+                        >
+                          <path
+                            if.bind="child.type === 'custom-element'"
+                            d="M2 2h8v2H2V2zm0 3h8v5H2V5z"
+                          />
+                          <path
+                            if.bind="child.type === 'custom-attribute'"
+                            d="M6 1L1 6l5 5 5-5-5-5z"
+                          />
+                        </svg>
+                      </span>
+                      <span class="component-name ${child.type}"
+                        >${child.name}</span
+                      >
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Vertical Splitter -->
+        <div class="splitter-vertical"></div>
+
+        <!-- Right Panel - Component Details -->
+        <div class="component-details-panel">
+          <div if.bind="!selectedComponentId" class="empty-details">
+            <div class="empty-details-content">
+              <div class="empty-details-icon">
+                <svg
+                  width="48"
+                  height="48"
+                  viewBox="0 0 48 48"
+                  fill="currentColor"
+                  opacity="0.3"
+                >
+                  <path d="M8 8h32v6H8V8zm0 10h32v22H8V18z" />
+                </svg>
+              </div>
+              <h3>Select a component</h3>
+              <p>
+                Choose a component from the tree to view its properties and
+                details.
+              </p>
+            </div>
+          </div>
+
+          <div
+            if.bind="selectedComponentId && selectedElement"
+            class="component-details"
+          >
+            <div class="details-header">
+              <div class="selected-component-info">
+                <span
+                  class="component-icon ${selectedElement ? 'custom-element' : 'custom-attribute'}"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 12 12"
+                    fill="currentColor"
+                  >
+                    <path
+                      if.bind="selectedElement"
+                      d="M2 2h8v2H2V2zm0 3h8v5H2V5z"
+                    />
+                    <path
+                      if.bind="!selectedElement"
+                      d="M6 1L1 6l5 5 5-5-5-5z"
+                    />
+                  </svg>
+                </span>
+                <span class="selected-component-name">
+                  ${selectedElement ? '<' + selectedElement.name + '>' : 'Custom
+                  Attribute'}
+                </span>
+              </div>
+            </div>
+
+            <div class="details-content">
+              <!-- Element Info -->
+              <div
+                class="element-info"
+                if.bind="selectedElement && selectedElement.aliases && selectedElement.aliases.length"
+              >
+                <div class="element-aliases">
+                  <span class="aliases-label">Also known as:</span>
+                  <span class="alias-list">${selectedElement.aliases.join(', ')}</span>
+                </div>
+              </div>
+
+              <!-- Properties Sections -->
+              <div class="properties-section" if.bind="selectedElement">
+                <div class="section-header">
+                  <span class="section-icon">⚡</span>
+                  <span class="section-title">Bindables</span>
+                  <span class="property-count" if.bind="selectedElement.bindables.length">(${selectedElement.bindables.length})</span>
+                </div>
+                <div class="section-content">
+                  <div
+                    if.bind="!selectedElement.bindables.length"
+                    class="empty-state"
+                  >
+                    No bindable properties
+                  </div>
+                  <ul class="properties-list" else>
+                    <li
+                      repeat.for="bindable of selectedElement.bindables"
+                      class="property-item"
+                    >
+                      <!-- Inline property display since property-view component isn't working -->
+                      <div class="property-row">
+                        <div class="property-main">
+                          <button
+                            class="expand-button"
+                            css="visibility: ${bindable.canExpand ? 'visible' : 'hidden'}"
+                            click.trigger="togglePropertyExpansion(bindable)"
+                          >
+                            <svg
+                              width="8"
+                              height="8"
+                              viewBox="0 0 8 8"
+                              class="expand-icon ${bindable.isExpanded ? 'expanded' : ''}"
+                            >
+                              <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                            </svg>
+                          </button>
+                          <span class="property-name">${bindable.name}</span>
+                          <span class="property-separator">:</span>
+                          <span class="property-value-wrapper">
+                            <span
+                              if.bind="!bindable.isEditing"
+                              class="property-value ${bindable.type} ${bindable.canEdit ? 'editable' : 'readonly'}"
+                              dblclick.trigger="bindable.canEdit ? editProperty(bindable) : null"
+                              title="${bindable.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                            >
+                              <span if.bind="bindable.type === 'string'">"</span
+                              >${bindable.value}<span
+                                if.bind="bindable.type === 'string'"
+                                >"</span
+                              >
+                            </span>
+
+                            <select
+                              if.bind="bindable.isEditing && bindable.type === 'boolean'"
+                              class="property-editor"
+                              value.bind="bindable.value ? 'true' : 'false'"
+                              change.trigger="saveProperty(bindable, $event.target.value)"
+                              blur.trigger="saveProperty(bindable, $event.target.value)"
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                            <input
+                              if.bind="bindable.isEditing && bindable.type !== 'boolean'"
+                              class="property-editor"
+                              type="text"
+                              value.bind="bindable.value"
+                              keydown.trigger="$event.code === 'Enter' ? saveProperty(bindable, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(bindable) : null)"
+                              blur.trigger="saveProperty(bindable, $event.target.value)"
+                              placeholder="Enter ${bindable.type} value (ESC to cancel)"
+                              focus.trigger="$event.target.select()"
+                            />
+                          </span>
+                        </div>
+
+                        <!-- Expanded child properties -->
+                        <div
+                          if.bind="bindable.isExpanded && bindable.expandedValue"
+                          class="property-children"
+                        >
+                          <div
+                            if.bind="!bindable.expandedValue.properties.length"
+                            class="empty-object"
+                          >
+                            Object has no enumerable properties
+                          </div>
+                          <div
+                            repeat.for="childProp of bindable.expandedValue.properties"
+                            class="child-property"
+                          >
+                            <div class="property-row">
+                              <div class="property-main">
+                                <button
+                                  class="expand-button"
+                                  css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}"
+                                  click.trigger="togglePropertyExpansion(childProp)"
+                                >
+                                  <svg
+                                    width="8"
+                                    height="8"
+                                    viewBox="0 0 8 8"
+                                    class="expand-icon ${childProp.isExpanded ? 'expanded' : ''}"
+                                  >
+                                    <path
+                                      d="M2 2 L6 4 L2 6 Z"
+                                      fill="currentColor"
+                                    />
+                                  </svg>
+                                </button>
+                                <span class="property-name"
+                                  >${childProp.name}</span
+                                >
+                                <span class="property-separator">:</span>
+                                <span class="property-value-wrapper">
+                                  <span
+                                    if.bind="!childProp.isEditing"
+                                    class="property-value ${childProp.type} ${childProp.canEdit ? 'editable' : 'readonly'}"
+                                    dblclick.trigger="childProp.canEdit ? editProperty(childProp) : null"
+                                    title="${childProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                  >
+                                    <span if.bind="childProp.type === 'string'"
+                                      >"</span
+                                    >${childProp.value}<span
+                                      if.bind="childProp.type === 'string'"
+                                      >"</span
+                                    >
+                                  </span>
+
+                                  <select
+                                    if.bind="childProp.isEditing && childProp.type === 'boolean'"
+                                    class="property-editor"
+                                    value.bind="childProp.value ? 'true' : 'false'"
+                                    change.trigger="saveProperty(childProp, $event.target.value)"
+                                    blur.trigger="saveProperty(childProp, $event.target.value)"
+                                  >
+                                    <option value="true">true</option>
+                                    <option value="false">false</option>
+                                  </select>
+                                  <input
+                                    if.bind="childProp.isEditing && childProp.type !== 'boolean'"
+                                    class="property-editor"
+                                    type="text"
+                                    value.bind="childProp.value"
+                                    keydown.trigger="$event.code === 'Enter' ? saveProperty(childProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(childProp) : null)"
+                                    blur.trigger="saveProperty(childProp, $event.target.value)"
+                                    placeholder="Enter ${childProp.type} value (ESC to cancel)"
+                                    focus.trigger="$event.target.select()"
+                                  />
+                                </span>
+                              </div>
+
+                              <!-- Nested child properties (second level) -->
+                              <div
+                                if.bind="childProp.isExpanded && childProp.expandedValue"
+                                class="property-children"
+                              >
+                                <div
+                                  if.bind="!childProp.expandedValue.properties.length"
+                                  class="empty-object"
+                                >
+                                  Object has no enumerable properties
+                                </div>
+                                <div
+                                  repeat.for="nestedProp of childProp.expandedValue.properties"
+                                  class="child-property"
+                                >
+                                  <div class="property-row">
+                                    <div class="property-main">
+                                      <button
+                                        class="expand-button"
+                                        css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}"
+                                        click.trigger="togglePropertyExpansion(nestedProp)"
+                                      >
+                                        <svg
+                                          width="8"
+                                          height="8"
+                                          viewBox="0 0 8 8"
+                                          class="expand-icon ${nestedProp.isExpanded ? 'expanded' : ''}"
+                                        >
+                                          <path
+                                            d="M2 2 L6 4 L2 6 Z"
+                                            fill="currentColor"
+                                          />
+                                        </svg>
+                                      </button>
+                                      <span class="property-name"
+                                        >${nestedProp.name}</span
+                                      >
+                                      <span class="property-separator">:</span>
+                                      <span class="property-value-wrapper">
+                                        <span
+                                          if.bind="!nestedProp.isEditing"
+                                          class="property-value ${nestedProp.type} ${nestedProp.canEdit ? 'editable' : 'readonly'}"
+                                          dblclick.trigger="nestedProp.canEdit ? editProperty(nestedProp) : null"
+                                          title="${nestedProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                        >
+                                          <span
+                                            if.bind="nestedProp.type === 'string'"
+                                            >"</span
+                                          >${nestedProp.value}<span
+                                            if.bind="nestedProp.type === 'string'"
+                                            >"</span
+                                          >
+                                        </span>
+
+                                        <select
+                                          if.bind="nestedProp.isEditing && nestedProp.type === 'boolean'"
+                                          class="property-editor"
+                                          value.bind="nestedProp.value ? 'true' : 'false'"
+                                          change.trigger="saveProperty(nestedProp, $event.target.value)"
+                                          blur.trigger="saveProperty(nestedProp, $event.target.value)"
+                                        >
+                                          <option value="true">true</option>
+                                          <option value="false">false</option>
+                                        </select>
+                                        <input
+                                          if.bind="nestedProp.isEditing && nestedProp.type !== 'boolean'"
+                                          class="property-editor"
+                                          type="text"
+                                          value.bind="nestedProp.value"
+                                          keydown.trigger="$event.code === 'Enter' ? saveProperty(nestedProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(nestedProp) : null)"
+                                          blur.trigger="saveProperty(nestedProp, $event.target.value)"
+                                          placeholder="Enter ${nestedProp.type} value (ESC to cancel)"
+                                          focus.trigger="$event.target.select()"
+                                        />
+                                      </span>
+                                    </div>
+
+                                    <!-- Third level nesting -->
+                                    <div
+                                      if.bind="nestedProp.isExpanded && nestedProp.expandedValue"
+                                      class="property-children"
+                                    >
+                                      <div
+                                        if.bind="!nestedProp.expandedValue.properties.length"
+                                        class="empty-object"
+                                      >
+                                        Object has no enumerable properties
+                                      </div>
+                                      <div
+                                        repeat.for="deepProp of nestedProp.expandedValue.properties"
+                                        class="child-property"
+                                      >
+                                        <div class="property-row">
+                                          <div class="property-main">
+                                            <button
+                                              class="expand-button"
+                                              css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}"
+                                              click.trigger="togglePropertyExpansion(deepProp)"
+                                            >
+                                              <svg
+                                                width="8"
+                                                height="8"
+                                                viewBox="0 0 8 8"
+                                                class="expand-icon ${deepProp.isExpanded ? 'expanded' : ''}"
+                                              >
+                                                <path
+                                                  d="M2 2 L6 4 L2 6 Z"
+                                                  fill="currentColor"
+                                                />
+                                              </svg>
+                                            </button>
+                                            <span class="property-name"
+                                              >${deepProp.name}</span
+                                            >
+                                            <span class="property-separator">:</span>
+                                            <span class="property-value-wrapper">
+                                              <span
+                                                if.bind="!deepProp.isEditing"
+                                                class="property-value ${deepProp.type} ${deepProp.canEdit ? 'editable' : 'readonly'}"
+                                                dblclick.trigger="deepProp.canEdit ? editProperty(deepProp) : null"
+                                                title="${deepProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                              >
+                                                <span
+                                                  if.bind="deepProp.type === 'string'"
+                                                  >"</span
+                                                >${deepProp.value}<span
+                                                  if.bind="deepProp.type === 'string'"
+                                                  >"</span
+                                                >
+                                              </span>
+
+                                              <select
+                                                if.bind="deepProp.isEditing && deepProp.type === 'boolean'"
+                                                class="property-editor"
+                                                value.bind="deepProp.value ? 'true' : 'false'"
+                                                change.trigger="saveProperty(deepProp, $event.target.value)"
+                                                blur.trigger="saveProperty(deepProp, $event.target.value)"
+                                              >
+                                                <option value="true">true</option>
+                                                <option value="false">false</option>
+                                              </select>
+                                              <input
+                                                if.bind="deepProp.isEditing && deepProp.type !== 'boolean'"
+                                                class="property-editor"
+                                                type="text"
+                                                value.bind="deepProp.value"
+                                                keydown.trigger="$event.code === 'Enter' ? saveProperty(deepProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deepProp) : null)"
+                                                blur.trigger="saveProperty(deepProp, $event.target.value)"
+                                                placeholder="Enter ${deepProp.type} value (ESC to cancel)"
+                                                focus.trigger="$event.target.select()"
+                                              />
+                                            </span>
+                                          </div>
+
+                                          <!-- Fourth level nesting -->
+                                          <div
+                                            if.bind="deepProp.isExpanded && deepProp.expandedValue"
+                                            class="property-children"
+                                          >
+                                            <div
+                                              if.bind="!deepProp.expandedValue.properties.length"
+                                              class="empty-object"
+                                            >
+                                              Object has no enumerable properties
+                                            </div>
+                                            <div
+                                              repeat.for="deeperProp of deepProp.expandedValue.properties"
+                                              class="child-property"
+                                            >
+                                              <div class="property-row">
+                                                <div class="property-main">
+                                                  <button
+                                                    class="expand-button"
+                                                    css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}"
+                                                    click.trigger="togglePropertyExpansion(deeperProp)"
+                                                  >
+                                                    <svg
+                                                      width="8"
+                                                      height="8"
+                                                      viewBox="0 0 8 8"
+                                                      class="expand-icon ${deeperProp.isExpanded ? 'expanded' : ''}"
+                                                    >
+                                                      <path
+                                                        d="M2 2 L6 4 L2 6 Z"
+                                                        fill="currentColor"
+                                                      />
+                                                    </svg>
+                                                  </button>
+                                                  <span class="property-name"
+                                                    >${deeperProp.name}</span
+                                                  >
+                                                  <span class="property-separator">:</span>
+                                                  <span class="property-value-wrapper">
+                                                    <span
+                                                      if.bind="!deeperProp.isEditing"
+                                                      class="property-value ${deeperProp.type} ${deeperProp.canEdit ? 'editable' : 'readonly'}"
+                                                      dblclick.trigger="deeperProp.canEdit ? editProperty(deeperProp) : null"
+                                                      title="${deeperProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                                    >
+                                                      <span
+                                                        if.bind="deeperProp.type === 'string'"
+                                                        >"</span
+                                                      >${deeperProp.value}<span
+                                                        if.bind="deeperProp.type === 'string'"
+                                                        >"</span
+                                                      >
+                                                    </span>
+
+                                                    <select
+                                                      if.bind="deeperProp.isEditing && deeperProp.type === 'boolean'"
+                                                      class="property-editor"
+                                                      value.bind="deeperProp.value ? 'true' : 'false'"
+                                                      change.trigger="saveProperty(deeperProp, $event.target.value)"
+                                                      blur.trigger="saveProperty(deeperProp, $event.target.value)"
+                                                    >
+                                                      <option value="true">true</option>
+                                                      <option value="false">false</option>
+                                                    </select>
+                                                    <input
+                                                      if.bind="deeperProp.isEditing && deeperProp.type !== 'boolean'"
+                                                      class="property-editor"
+                                                      type="text"
+                                                      value.bind="deeperProp.value"
+                                                      keydown.trigger="$event.code === 'Enter' ? saveProperty(deeperProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deeperProp) : null)"
+                                                      blur.trigger="saveProperty(deeperProp, $event.target.value)"
+                                                      placeholder="Enter ${deeperProp.type} value (ESC to cancel)"
+                                                      focus.trigger="$event.target.select()"
+                                                    />
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div class="properties-section" if.bind="selectedElement">
+                <div class="section-header">
+                  <span class="section-icon">🏠</span>
+                  <span class="section-title">Properties</span>
+                  <span class="property-count" if.bind="selectedElement.properties.length">(${selectedElement.properties.length})</span>
+                </div>
+                <div class="section-content">
+                  <div
+                    if.bind="!selectedElement.properties.length"
+                    class="empty-state"
+                  >
+                    No properties
+                  </div>
+                  <ul class="properties-list" else>
+                    <li
+                      repeat.for="property of selectedElement.properties"
+                      class="property-item"
+                    >
+                      <!-- Inline property display since property-view component isn't working -->
+                      <div class="property-row">
+                        <div class="property-main">
+                          <button
+                            class="expand-button"
+                            css="visibility: ${property.canExpand ? 'visible' : 'hidden'}"
+                            click.trigger="togglePropertyExpansion(property)"
+                          >
+                            <svg
+                              width="8"
+                              height="8"
+                              viewBox="0 0 8 8"
+                              class="expand-icon ${property.isExpanded ? 'expanded' : ''}"
+                            >
+                              <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                            </svg>
+                          </button>
+                          <span class="property-name">${property.name}</span>
+                          <span class="property-separator">:</span>
+                          <span class="property-value-wrapper">
+                            <span
+                              if.bind="!property.isEditing"
+                              class="property-value ${property.type} ${property.canEdit ? 'editable' : 'readonly'}"
+                              dblclick.trigger="property.canEdit ? editProperty(property) : null"
+                              title="${property.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                            >
+                              <span if.bind="property.type === 'string'">"</span
+                              >${property.value}<span
+                                if.bind="property.type === 'string'"
+                                >"</span
+                              >
+                            </span>
+
+                            <select
+                              if.bind="property.isEditing && property.type === 'boolean'"
+                              class="property-editor"
+                              value.bind="property.value ? 'true' : 'false'"
+                              change.trigger="saveProperty(property, $event.target.value)"
+                              blur.trigger="saveProperty(property, $event.target.value)"
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                            <input
+                              if.bind="property.isEditing && property.type !== 'boolean'"
+                              class="property-editor"
+                              type="text"
+                              value.bind="property.value"
+                              keydown.trigger="$event.code === 'Enter' ? saveProperty(property, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(property) : null)"
+                              blur.trigger="saveProperty(property, $event.target.value)"
+                              placeholder="Enter ${property.type} value (ESC to cancel)"
+                              focus.trigger="$event.target.select()"
+                            />
+                          </span>
+                        </div>
+
+                        <!-- Expanded child properties -->
+                        <div
+                          if.bind="property.isExpanded && property.expandedValue"
+                          class="property-children"
+                        >
+                          <div
+                            if.bind="!property.expandedValue.properties.length"
+                            class="empty-object"
+                          >
+                            Object has no enumerable properties
+                          </div>
+                          <div
+                            repeat.for="childProp of property.expandedValue.properties"
+                            class="child-property"
+                          >
+                            <div class="property-row">
+                              <div class="property-main">
+                                <button
+                                  class="expand-button"
+                                  css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}"
+                                  click.trigger="togglePropertyExpansion(childProp)"
+                                >
+                                  <svg
+                                    width="8"
+                                    height="8"
+                                    viewBox="0 0 8 8"
+                                    class="expand-icon ${childProp.isExpanded ? 'expanded' : ''}"
+                                  >
+                                    <path
+                                      d="M2 2 L6 4 L2 6 Z"
+                                      fill="currentColor"
+                                    />
+                                  </svg>
+                                </button>
+                                <span class="property-name"
+                                  >${childProp.name}</span
+                                >
+                                <span class="property-separator">:</span>
+                                <span class="property-value-wrapper">
+                                  <span
+                                    if.bind="!childProp.isEditing"
+                                    class="property-value ${childProp.type} ${childProp.canEdit ? 'editable' : 'readonly'}"
+                                    dblclick.trigger="childProp.canEdit ? editProperty(childProp) : null"
+                                    title="${childProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                  >
+                                    <span if.bind="childProp.type === 'string'"
+                                      >"</span
+                                    >${childProp.value}<span
+                                      if.bind="childProp.type === 'string'"
+                                      >"</span
+                                    >
+                                  </span>
+
+                                  <select
+                                    if.bind="childProp.isEditing && childProp.type === 'boolean'"
+                                    class="property-editor"
+                                    value.bind="childProp.value ? 'true' : 'false'"
+                                    change.trigger="saveProperty(childProp, $event.target.value)"
+                                    blur.trigger="saveProperty(childProp, $event.target.value)"
+                                  >
+                                    <option value="true">true</option>
+                                    <option value="false">false</option>
+                                  </select>
+                                  <input
+                                    if.bind="childProp.isEditing && childProp.type !== 'boolean'"
+                                    class="property-editor"
+                                    type="text"
+                                    value.bind="childProp.value"
+                                    keydown.trigger="$event.code === 'Enter' ? saveProperty(childProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(childProp) : null)"
+                                    blur.trigger="saveProperty(childProp, $event.target.value)"
+                                    placeholder="Enter ${childProp.type} value (ESC to cancel)"
+                                    focus.trigger="$event.target.select()"
+                                  />
+                                </span>
+                              </div>
+
+                              <!-- Nested child properties (second level) -->
+                              <div
+                                if.bind="childProp.isExpanded && childProp.expandedValue"
+                                class="property-children"
+                              >
+                                <div
+                                  if.bind="!childProp.expandedValue.properties.length"
+                                  class="empty-object"
+                                >
+                                  Object has no enumerable properties
+                                </div>
+                                <div
+                                  repeat.for="nestedProp of childProp.expandedValue.properties"
+                                  class="child-property"
+                                >
+                                  <div class="property-row">
+                                    <div class="property-main">
+                                      <button
+                                        class="expand-button"
+                                        css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}"
+                                        click.trigger="togglePropertyExpansion(nestedProp)"
+                                      >
+                                        <svg
+                                          width="8"
+                                          height="8"
+                                          viewBox="0 0 8 8"
+                                          class="expand-icon ${nestedProp.isExpanded ? 'expanded' : ''}"
+                                        >
+                                          <path
+                                            d="M2 2 L6 4 L2 6 Z"
+                                            fill="currentColor"
+                                          />
+                                        </svg>
+                                      </button>
+                                      <span class="property-name"
+                                        >${nestedProp.name}</span
+                                      >
+                                      <span class="property-separator">:</span>
+                                      <span class="property-value-wrapper">
+                                        <span
+                                          if.bind="!nestedProp.isEditing"
+                                          class="property-value ${nestedProp.type} ${nestedProp.canEdit ? 'editable' : 'readonly'}"
+                                          dblclick.trigger="nestedProp.canEdit ? editProperty(nestedProp) : null"
+                                          title="${nestedProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                        >
+                                          <span
+                                            if.bind="nestedProp.type === 'string'"
+                                            >"</span
+                                          >${nestedProp.value}<span
+                                            if.bind="nestedProp.type === 'string'"
+                                            >"</span
+                                          >
+                                        </span>
+
+                                        <select
+                                          if.bind="nestedProp.isEditing && nestedProp.type === 'boolean'"
+                                          class="property-editor"
+                                          value.bind="nestedProp.value ? 'true' : 'false'"
+                                          change.trigger="saveProperty(nestedProp, $event.target.value)"
+                                          blur.trigger="saveProperty(nestedProp, $event.target.value)"
+                                        >
+                                          <option value="true">true</option>
+                                          <option value="false">false</option>
+                                        </select>
+                                        <input
+                                          if.bind="nestedProp.isEditing && nestedProp.type !== 'boolean'"
+                                          class="property-editor"
+                                          type="text"
+                                          value.bind="nestedProp.value"
+                                          keydown.trigger="$event.code === 'Enter' ? saveProperty(nestedProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(nestedProp) : null)"
+                                          blur.trigger="saveProperty(nestedProp, $event.target.value)"
+                                          placeholder="Enter ${nestedProp.type} value (ESC to cancel)"
+                                          focus.trigger="$event.target.select()"
+                                        />
+                                      </span>
+                                    </div>
+
+                                    <!-- Third level nesting -->
+                                    <div
+                                      if.bind="nestedProp.isExpanded && nestedProp.expandedValue"
+                                      class="property-children"
+                                    >
+                                      <div
+                                        if.bind="!nestedProp.expandedValue.properties.length"
+                                        class="empty-object"
+                                      >
+                                        Object has no enumerable properties
+                                      </div>
+                                      <div
+                                        repeat.for="deepProp of nestedProp.expandedValue.properties"
+                                        class="child-property"
+                                      >
+                                        <div class="property-row">
+                                          <div class="property-main">
+                                            <button
+                                              class="expand-button"
+                                              css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}"
+                                              click.trigger="togglePropertyExpansion(deepProp)"
+                                            >
+                                              <svg
+                                                width="8"
+                                                height="8"
+                                                viewBox="0 0 8 8"
+                                                class="expand-icon ${deepProp.isExpanded ? 'expanded' : ''}"
+                                              >
+                                                <path
+                                                  d="M2 2 L6 4 L2 6 Z"
+                                                  fill="currentColor"
+                                                />
+                                              </svg>
+                                            </button>
+                                            <span class="property-name"
+                                              >${deepProp.name}</span
+                                            >
+                                            <span class="property-separator">:</span>
+                                            <span class="property-value-wrapper">
+                                              <span
+                                                if.bind="!deepProp.isEditing"
+                                                class="property-value ${deepProp.type} ${deepProp.canEdit ? 'editable' : 'readonly'}"
+                                                dblclick.trigger="deepProp.canEdit ? editProperty(deepProp) : null"
+                                                title="${deepProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                              >
+                                                <span
+                                                  if.bind="deepProp.type === 'string'"
+                                                  >"</span
+                                                >${deepProp.value}<span
+                                                  if.bind="deepProp.type === 'string'"
+                                                  >"</span
+                                                >
+                                              </span>
+
+                                              <input
+                                                if.bind="deepProp.isEditing"
+                                                class="property-editor"
+                                                type="text"
+                                                value.bind="deepProp.value"
+                                                keydown.trigger="$event.code === 'Enter' ? saveProperty(deepProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deepProp) : null)"
+                                                blur.trigger="saveProperty(deepProp, $event.target.value)"
+                                                placeholder="Enter ${deepProp.type} value (ESC to cancel)"
+                                                focus.trigger="$event.target.select()"
+                                              />
+                                            </span>
+                                          </div>
+
+                                          <!-- Fourth level nesting -->
+                                          <div
+                                            if.bind="deepProp.isExpanded && deepProp.expandedValue"
+                                            class="property-children"
+                                          >
+                                            <div
+                                              if.bind="!deepProp.expandedValue.properties.length"
+                                              class="empty-object"
+                                            >
+                                              Object has no enumerable properties
+                                            </div>
+                                            <div
+                                              repeat.for="deeperProp of deepProp.expandedValue.properties"
+                                              class="child-property"
+                                            >
+                                              <div class="property-row">
+                                                <div class="property-main">
+                                                  <button
+                                                    class="expand-button"
+                                                    css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}"
+                                                    click.trigger="togglePropertyExpansion(deeperProp)"
+                                                  >
+                                                    <svg
+                                                      width="8"
+                                                      height="8"
+                                                      viewBox="0 0 8 8"
+                                                      class="expand-icon ${deeperProp.isExpanded ? 'expanded' : ''}"
+                                                    >
+                                                      <path
+                                                        d="M2 2 L6 4 L2 6 Z"
+                                                        fill="currentColor"
+                                                      />
+                                                    </svg>
+                                                  </button>
+                                                  <span class="property-name"
+                                                    >${deeperProp.name}</span
+                                                  >
+                                                  <span class="property-separator">:</span>
+                                                  <span class="property-value-wrapper">
+                                                    <span
+                                                      if.bind="!deeperProp.isEditing"
+                                                      class="property-value ${deeperProp.type} ${deeperProp.canEdit ? 'editable' : 'readonly'}"
+                                                      dblclick.trigger="deeperProp.canEdit ? editProperty(deeperProp) : null"
+                                                      title="${deeperProp.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                                    >
+                                                      <span
+                                                        if.bind="deeperProp.type === 'string'"
+                                                        >"</span
+                                                      >${deeperProp.value}<span
+                                                        if.bind="deeperProp.type === 'string'"
+                                                        >"</span
+                                                      >
+                                                    </span>
+
+                                                    <input
+                                                      if.bind="deeperProp.isEditing"
+                                                      class="property-editor"
+                                                      type="text"
+                                                      value.bind="deeperProp.value"
+                                                      keydown.trigger="$event.code === 'Enter' ? saveProperty(deeperProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deeperProp) : null)"
+                                                      blur.trigger="saveProperty(deeperProp, $event.target.value)"
+                                                      placeholder="Enter ${deeperProp.type} value (ESC to cancel)"
+                                                      focus.trigger="$event.target.select()"
+                                                    />
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Custom Attributes -->
+              <div
+                class="properties-section"
+                if.bind="selectedElementAttributes && selectedElementAttributes.length"
+              >
+                <div class="section-header">
+                  <span class="section-icon">⚙️</span>
+                  <span class="section-title">Custom Attributes</span>
+                  <span class="property-count"
+                    >(${selectedElementAttributes.length})</span
+                  >
+                </div>
+                <div class="section-content">
+                  <div
+                    repeat.for="attribute of selectedElementAttributes"
+                    class="attribute-group"
+                  >
+                    <div class="attribute-header">
+                      <span class="attribute-name">${attribute.name}</span>
+                    </div>
+                    <div class="attribute-content">
+                      <!-- Bindables -->
+                      <div class="section-header">
+                        <span class="section-icon">⚡</span>
+                        <span class="section-title">Bindables</span>
+                        <span class="property-count" if.bind="attribute.bindables.length">(${attribute.bindables.length})</span>
+                      </div>
+                      <div class="section-content">
+                        <div if.bind="!attribute.bindables.length" class="empty-state">No bindable properties</div>
+                        <ul class="properties-list" else>
+                          <li repeat.for="bindable of attribute.bindables" class="property-item">
+                            <div class="property-row">
+                              <div class="property-main">
+                                <button
+                                  class="expand-button"
+                                  css="visibility: ${bindable.canExpand ? 'visible' : 'hidden'}"
+                                  click.trigger="togglePropertyExpansion(bindable)"
+                                >
+                                  <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${bindable.isExpanded ? 'expanded' : ''}">
+                                    <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                  </svg>
+                                </button>
+                                <span class="property-name">${bindable.name}</span>
+                                <span class="property-separator">:</span>
+                                <span class="property-value-wrapper">
+                                  <span
+                                    if.bind="!bindable.isEditing"
+                                    class="property-value ${bindable.type} ${bindable.canEdit ? 'editable' : 'readonly'}"
+                                    dblclick.trigger="bindable.canEdit ? editProperty(bindable) : null"
+                                    title="${bindable.canEdit ? 'Double-click to edit' : 'Read-only property'}"
+                                  >
+                                    <span if.bind="bindable.type === 'string'">"</span>${bindable.value}<span if.bind="bindable.type === 'string'">"</span>
+                                  </span>
+                                  <input
+                                    if.bind="bindable.isEditing"
+                                    class="property-editor"
+                                    type="text"
+                                    value.bind="bindable.value"
+                                    keydown.trigger="$event.code === 'Enter' ? saveProperty(bindable, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(bindable) : null)"
+                                    blur.trigger="saveProperty(bindable, $event.target.value)"
+                                    placeholder="Enter ${bindable.type} value (ESC to cancel)"
+                                    focus.trigger="$event.target.select()"
+                                  />
+                                </span>
+                              </div>
+
+                              <div if.bind="bindable.isExpanded && bindable.expandedValue" class="property-children">
+                                <div if.bind="!bindable.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                <div repeat.for="childProp of bindable.expandedValue.properties" class="child-property">
+                                  <div class="property-row">
+                                    <div class="property-main">
+                                      <button class="expand-button" css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(childProp)">
+                                        <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${childProp.isExpanded ? 'expanded' : ''}">
+                                          <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                        </svg>
+                                      </button>
+                                      <span class="property-name">${childProp.name}</span>
+                                      <span class="property-separator">:</span>
+                                      <span class="property-value-wrapper">
+                                        <span if.bind="!childProp.isEditing" class="property-value ${childProp.type} ${childProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="childProp.canEdit ? editProperty(childProp) : null" title="${childProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                          <span if.bind="childProp.type === 'string'">"</span>${childProp.value}<span if.bind="childProp.type === 'string'">"</span>
+                                        </span>
+                                        <input if.bind="childProp.isEditing" class="property-editor" type="text" value.bind="childProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(childProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(childProp) : null)" blur.trigger="saveProperty(childProp, $event.target.value)" placeholder="Enter ${childProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                      </span>
+                                    </div>
+
+                                    <div if.bind="childProp.isExpanded && childProp.expandedValue" class="property-children">
+                                      <div if.bind="!childProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                      <div repeat.for="nestedProp of childProp.expandedValue.properties" class="child-property">
+                                        <div class="property-row">
+                                          <div class="property-main">
+                                            <button class="expand-button" css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(nestedProp)">
+                                              <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${nestedProp.isExpanded ? 'expanded' : ''}">
+                                                <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                              </svg>
+                                            </button>
+                                            <span class="property-name">${nestedProp.name}</span>
+                                            <span class="property-separator">:</span>
+                                            <span class="property-value-wrapper">
+                                              <span if.bind="!nestedProp.isEditing" class="property-value ${nestedProp.type} ${nestedProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="nestedProp.canEdit ? editProperty(nestedProp) : null" title="${nestedProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                                <span if.bind="nestedProp.type === 'string'">"</span>${nestedProp.value}<span if.bind="nestedProp.type === 'string'">"</span>
+                                              </span>
+                                              <input if.bind="nestedProp.isEditing" class="property-editor" type="text" value.bind="nestedProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(nestedProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(nestedProp) : null)" blur.trigger="saveProperty(nestedProp, $event.target.value)" placeholder="Enter ${nestedProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                            </span>
+                                          </div>
+
+                                          <div if.bind="nestedProp.isExpanded && nestedProp.expandedValue" class="property-children">
+                                            <div if.bind="!nestedProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                            <div repeat.for="deepProp of nestedProp.expandedValue.properties" class="child-property">
+                                              <div class="property-row">
+                                                <div class="property-main">
+                                                  <button class="expand-button" css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deepProp)">
+                                                    <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deepProp.isExpanded ? 'expanded' : ''}">
+                                                      <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                                    </svg>
+                                                  </button>
+                                                  <span class="property-name">${deepProp.name}</span>
+                                                  <span class="property-separator">:</span>
+                                                  <span class="property-value-wrapper">
+                                                    <span if.bind="!deepProp.isEditing" class="property-value ${deepProp.type} ${deepProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="deepProp.canEdit ? editProperty(deepProp) : null" title="${deepProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                                      <span if.bind="deepProp.type === 'string'">"</span>${deepProp.value}<span if.bind="deepProp.type === 'string'">"</span>
+                                                    </span>
+                                                    <select if.bind="deepProp.isEditing && deepProp.type === 'boolean'" class="property-editor" value.bind="deepProp.value ? 'true' : 'false'" change.trigger="saveProperty(deepProp, $event.target.value)" blur.trigger="saveProperty(deepProp, $event.target.value)">
+                                                      <option value="true">true</option>
+                                                      <option value="false">false</option>
+                                                    </select>
+                                                    <input if.bind="deepProp.isEditing && deepProp.type !== 'boolean'" class="property-editor" type="text" value.bind="deepProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(deepProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deepProp) : null)" blur.trigger="saveProperty(deepProp, $event.target.value)" placeholder="Enter ${deepProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                                  </span>
+                                                </div>
+
+                                                <div if.bind="deepProp.isExpanded && deepProp.expandedValue" class="property-children">
+                                                  <div if.bind="!deepProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                                  <div repeat.for="deeperProp of deepProp.expandedValue.properties" class="child-property">
+                                                    <div class="property-row">
+                                                      <div class="property-main">
+                                                        <button class="expand-button" css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deeperProp)">
+                                                          <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deeperProp.isExpanded ? 'expanded' : ''}">
+                                                            <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                                          </svg>
+                                                        </button>
+                                                        <span class="property-name">${deeperProp.name}</span>
+                                                        <span class="property-separator">:</span>
+                                                        <span class="property-value-wrapper">
+                                                          <span if.bind="!deeperProp.isEditing" class="property-value ${deeperProp.type} ${deeperProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="deeperProp.canEdit ? editProperty(deeperProp) : null" title="${deeperProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                                            <span if.bind="deeperProp.type === 'string'">"</span>${deeperProp.value}<span if.bind="deeperProp.type === 'string'">"</span>
+                                                          </span>
+                                                          <select if.bind="deeperProp.isEditing && deeperProp.type === 'boolean'" class="property-editor" value.bind="deeperProp.value ? 'true' : 'false'" change.trigger="saveProperty(deeperProp, $event.target.value)" blur.trigger="saveProperty(deeperProp, $event.target.value)">
+                                                            <option value="true">true</option>
+                                                            <option value="false">false</option>
+                                                          </select>
+                                                          <input if.bind="deeperProp.isEditing && deeperProp.type !== 'boolean'" class="property-editor" type="text" value.bind="deeperProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(deeperProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deeperProp) : null)" blur.trigger="saveProperty(deeperProp, $event.target.value)" placeholder="Enter ${deeperProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </li>
+                        </ul>
+                      </div>
+
+                      <!-- Properties -->
+                      <div class="section-header">
+                        <span class="section-icon">🏠</span>
+                        <span class="section-title">Properties</span>
+                        <span class="property-count" if.bind="attribute.properties.length">(${attribute.properties.length})</span>
+                      </div>
+                      <div class="section-content">
+                        <div if.bind="!attribute.properties.length" class="empty-state">No properties</div>
+                        <ul class="properties-list" else>
+                          <li repeat.for="property of attribute.properties" class="property-item">
+                            <div class="property-row">
+                              <div class="property-main">
+                                <button class="expand-button" css="visibility: ${property.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(property)">
+                                  <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${property.isExpanded ? 'expanded' : ''}">
+                                    <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                  </svg>
+                                </button>
+                                <span class="property-name">${property.name}</span>
+                                <span class="property-separator">:</span>
+                                <span class="property-value-wrapper">
+                                  <span if.bind="!property.isEditing" class="property-value ${property.type} ${property.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="property.canEdit ? editProperty(property) : null" title="${property.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                    <span if.bind="property.type === 'string'">"</span>${property.value}<span if.bind="property.type === 'string'">"</span>
+                                  </span>
+                                  <input if.bind="property.isEditing" class="property-editor" type="text" value.bind="property.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(property, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(property) : null)" blur.trigger="saveProperty(property, $event.target.value)" placeholder="Enter ${property.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                </span>
+                              </div>
+
+                              <div if.bind="property.isExpanded && property.expandedValue" class="property-children">
+                                <div if.bind="!property.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                <div repeat.for="childProp of property.expandedValue.properties" class="child-property">
+                                  <div class="property-row">
+                                    <div class="property-main">
+                                      <button class="expand-button" css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(childProp)">
+                                        <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${childProp.isExpanded ? 'expanded' : ''}">
+                                          <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                        </svg>
+                                      </button>
+                                      <span class="property-name">${childProp.name}</span>
+                                      <span class="property-separator">:</span>
+                                      <span class="property-value-wrapper">
+                                        <span if.bind="!childProp.isEditing" class="property-value ${childProp.type} ${childProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="childProp.canEdit ? editProperty(childProp) : null" title="${childProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                          <span if.bind="childProp.type === 'string'">"</span>${childProp.value}<span if.bind="childProp.type === 'string'">"</span>
+                                        </span>
+                                        <select if.bind="childProp.isEditing && childProp.type === 'boolean'" class="property-editor" value.bind="childProp.value ? 'true' : 'false'" change.trigger="saveProperty(childProp, $event.target.value)" blur.trigger="saveProperty(childProp, $event.target.value)">
+                                          <option value="true">true</option>
+                                          <option value="false">false</option>
+                                        </select>
+                                        <input if.bind="childProp.isEditing && childProp.type !== 'boolean'" class="property-editor" type="text" value.bind="childProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(childProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(childProp) : null)" blur.trigger="saveProperty(childProp, $event.target.value)" placeholder="Enter ${childProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                      </span>
+                                    </div>
+
+                                    <div if.bind="childProp.isExpanded && childProp.expandedValue" class="property-children">
+                                      <div if.bind="!childProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                      <div repeat.for="nestedProp of childProp.expandedValue.properties" class="child-property">
+                                        <div class="property-row">
+                                          <div class="property-main">
+                                            <button class="expand-button" css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(nestedProp)">
+                                              <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${nestedProp.isExpanded ? 'expanded' : ''}">
+                                                <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                              </svg>
+                                            </button>
+                                            <span class="property-name">${nestedProp.name}</span>
+                                            <span class="property-separator">:</span>
+                                            <span class="property-value-wrapper">
+                                              <span if.bind="!nestedProp.isEditing" class="property-value ${nestedProp.type} ${nestedProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="nestedProp.canEdit ? editProperty(nestedProp) : null" title="${nestedProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                                <span if.bind="nestedProp.type === 'string'">"</span>${nestedProp.value}<span if.bind="nestedProp.type === 'string'">"</span>
+                                              </span>
+                                              <select if.bind="nestedProp.isEditing && nestedProp.type === 'boolean'" class="property-editor" value.bind="nestedProp.value ? 'true' : 'false'" change.trigger="saveProperty(nestedProp, $event.target.value)" blur.trigger="saveProperty(nestedProp, $event.target.value)">
+                                                <option value="true">true</option>
+                                                <option value="false">false</option>
+                                              </select>
+                                              <input if.bind="nestedProp.isEditing && nestedProp.type !== 'boolean'" class="property-editor" type="text" value.bind="nestedProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(nestedProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(nestedProp) : null)" blur.trigger="saveProperty(nestedProp, $event.target.value)" placeholder="Enter ${nestedProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                            </span>
+                                          </div>
+
+                                          <div if.bind="nestedProp.isExpanded && nestedProp.expandedValue" class="property-children">
+                                            <div if.bind="!nestedProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                            <div repeat.for="deepProp of nestedProp.expandedValue.properties" class="child-property">
+                                              <div class="property-row">
+                                                <div class="property-main">
+                                                  <button class="expand-button" css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deepProp)">
+                                                    <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deepProp.isExpanded ? 'expanded' : ''}">
+                                                      <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                                    </svg>
+                                                  </button>
+                                                  <span class="property-name">${deepProp.name}</span>
+                                                  <span class="property-separator">:</span>
+                                                  <span class="property-value-wrapper">
+                                                    <span if.bind="!deepProp.isEditing" class="property-value ${deepProp.type} ${deepProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="deepProp.canEdit ? editProperty(deepProp) : null" title="${deepProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                                      <span if.bind="deepProp.type === 'string'">"</span>${deepProp.value}<span if.bind="deepProp.type === 'string'">"</span>
+                                                    </span>
+                                                    <select if.bind="deepProp.isEditing && deepProp.type === 'boolean'" class="property-editor" value.bind="deepProp.value ? 'true' : 'false'" change.trigger="saveProperty(deepProp, $event.target.value)" blur.trigger="saveProperty(deepProp, $event.target.value)">
+                                                      <option value="true">true</option>
+                                                      <option value="false">false</option>
+                                                    </select>
+                                                    <input if.bind="deepProp.isEditing && deepProp.type !== 'boolean'" class="property-editor" type="text" value.bind="deepProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(deepProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deepProp) : null)" blur.trigger="saveProperty(deepProp, $event.target.value)" placeholder="Enter ${deepProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                                  </span>
+                                                </div>
+
+                                                <div if.bind="deepProp.isExpanded && deepProp.expandedValue" class="property-children">
+                                                  <div if.bind="!deepProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                                  <div repeat.for="deeperProp of deepProp.expandedValue.properties" class="child-property">
+                                                    <div class="property-row">
+                                                      <div class="property-main">
+                                                        <button class="expand-button" css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deeperProp)">
+                                                          <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deeperProp.isExpanded ? 'expanded' : ''}">
+                                                            <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                                                          </svg>
+                                                        </button>
+                                                        <span class="property-name">${deeperProp.name}</span>
+                                                        <span class="property-separator">:</span>
+                                                        <span class="property-value-wrapper">
+                                                          <span if.bind="!deeperProp.isEditing" class="property-value ${deeperProp.type} ${deeperProp.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="deeperProp.canEdit ? editProperty(deeperProp) : null" title="${deeperProp.canEdit ? 'Double-click to edit' : 'Read-only property'}">
+                                                            <span if.bind="deeperProp.type === 'string'">"</span>${deeperProp.value}<span if.bind="deeperProp.type === 'string'">"</span>
+                                                          </span>
+                                                          <select if.bind="deeperProp.isEditing && deeperProp.type === 'boolean'" class="property-editor" value.bind="deeperProp.value ? 'true' : 'false'" change.trigger="saveProperty(deeperProp, $event.target.value)" blur.trigger="saveProperty(deeperProp, $event.target.value)">
+                                                            <option value="true">true</option>
+                                                            <option value="false">false</option>
+                                                          </select>
+                                                          <input if.bind="deeperProp.isEditing && deeperProp.type !== 'boolean'" class="property-editor" type="text" value.bind="deeperProp.value" keydown.trigger="$event.code === 'Enter' ? saveProperty(deeperProp, $event.target.value) : ($event.code === 'Escape' ? cancelPropertyEdit(deeperProp) : null)" blur.trigger="saveProperty(deeperProp, $event.target.value)" placeholder="Enter ${deeperProp.type} value (ESC to cancel)" focus.trigger="$event.target.select()" />
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>

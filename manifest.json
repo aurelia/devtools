@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "Aurelia Inspector",
+  "version": "0.1.0",
+  "description": "Chrome DevTools extension for inspecting Aurelia v1 and v2 applications. Adds a dedicated Aurelia panel with component tree view and property inspector.",
+  "author": "Aurelia Team",
+  "devtools_page": "devtools/devtools.html",
+  "icons": {
+    "16": "images/16.png",
+    "48": "images/48.png",
+    "128": "images/128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "devtools/devtools.html",
+        "devtools-background.html"
+      ],
+      "matches": [
+        "*://*/*"
+      ]
+    }
+  ],
+  "content_scripts": [
+    {
+      "all_frames": true,
+      "matches": ["<all_urls>"],
+      "js": ["build/contentscript.js"],
+      "run_at": "document_start"
+    },
+    {
+      "all_frames": true,
+      "matches": ["<all_urls>"],
+      "js": ["build/detector.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "images/16-GREY.png",
+      "48": "images/48-GREY.png",
+      "128": "images/128-GREY.png"
+    },
+    "default_title": "Aurelia Devtools",
+    "default_popup": "popups/missing.html"
+  },
+  "background": {
+    "service_worker": "build/background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  },
+  "host_permissions": ["file:///*", "http://*/*", "https://*/*"]
+}
