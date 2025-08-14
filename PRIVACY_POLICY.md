@@ -58,7 +58,7 @@ We may update this privacy policy from time to time. Any changes will be reflect
 For questions about this privacy policy or the Aurelia Inspector extension, please:
 
 - Visit the [Aurelia website](https://aurelia.io)
-- Open an issue on the [Aurelia DevTools GitHub repository](https://github.com/aurelia/dev-tools)
+- Open an issue on the [Aurelia DevTools GitHub repository](https://github.com/aurelia/devtools)
 - Contact the Aurelia team through official channels
 
 ## Summary
