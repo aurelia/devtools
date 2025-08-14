@@ -175,115 +175,108 @@ export class DebugHost implements ICustomElementViewModel {
                 const instance = debugItem.instance;
                 const propertyName = property.name;
 
-
-                if (instance && propertyName && instance.hasOwnProperty(propertyName)) {
+                if (instance && propertyName) {
                   try {
                     const oldValue = instance[propertyName];
-                    instance[propertyName] = property.value;
+
+                    // Prefer using accessor/observers to avoid shadowing prototype accessors
+                    let updatedViaAccessor = false;
+
+                    // Try prototype/accessor setter first
+                    try {
+                      const proto = Object.getPrototypeOf(instance);
+                      const ownDesc = Object.getOwnPropertyDescriptor(instance, propertyName);
+                      const protoDesc = proto ? Object.getOwnPropertyDescriptor(proto, propertyName) : undefined;
+                      const desc = ownDesc || protoDesc;
+                      if (desc && typeof desc.set === 'function') {
+                        desc.set.call(instance, property.value);
+                        updatedViaAccessor = true;
+                      }
+                    } catch {}
+
+                    // Fallback to direct assignment (will also create own prop if needed)
+                    if (!updatedViaAccessor) {
+                      instance[propertyName] = property.value;
+                    }
 
                     // Trigger Aurelia 2 change detection
                     try {
-                      // Method 1: Find the DOM element and trigger proper change detection
+                      // Find the DOM element and trigger proper change detection
                       const elements = document.querySelectorAll('*');
                       for (const element of elements) {
                         const au = element['$au'];
-                        if (au) {
-                          const customElement = au['au:resource:custom-element'];
-                          if (customElement && customElement.viewModel === instance) {
+                        if (!au) continue;
+                        const customElement = au['au:resource:custom-element'];
+                        if (customElement && customElement.viewModel === instance) {
+                          // Notify via known observer bags
+                          try {
+                            if (instance['$observers']) {
+                              const observer = instance['$observers'][propertyName];
+                              if (observer && observer.notifySubscribers) {
+                                observer.notifySubscribers(property.value, oldValue);
+                              }
+                            }
+                            if (instance['__observers__']) {
+                              const observer = instance['__observers__'][propertyName];
+                              if (observer && observer.setValue) {
+                                observer.setValue(property.value);
+                              }
+                            }
+                          } catch {}
 
-                            // Method 1: Try to notify through observable system
+                          // Use container services if available
+                          if (customElement.controller && customElement.controller.container) {
                             try {
-                              // Check if the instance has an observable system we can notify
-                              if (instance['$observers']) {
-                                const observer = instance['$observers'][propertyName];
-                                if (observer && observer.notifySubscribers) {
-                                  observer.notifySubscribers(property.value, oldValue);
-                                }
-                              }
-
-                              // Check for Aurelia 2 style observers
-                              if (instance['__observers__']) {
-                                const observer = instance['__observers__'][propertyName];
-                                if (observer && observer.setValue) {
-                                  observer.setValue(property.value);
-                                }
-                              }
-                            } catch (observerError) {
-                              // Continue to other methods if observer approach fails
-                            }
-
-                            // Method 2: Try to trigger change detection through controller
-                            if (customElement.controller && customElement.controller.container) {
-                              try {
-                                // Get the platform and observation locator if available
-                                const platform = customElement.controller.container.get('IPlatform');
-                                const observationLocator = customElement.controller.container.get('IObservationLocator', true);
-                                
-                                if (platform) {
-                                  platform.queueMicrotask(() => {
-                                    // Method 2a: Try to get the property accessor and trigger change
-                                    if (observationLocator) {
-                                      try {
-                                        const accessor = observationLocator.getAccessor(instance, propertyName);
-                                        if (accessor && accessor.setValue) {
-                                          accessor.setValue(property.value, instance, propertyName);
-                                        } else if (accessor && accessor.notifySubscribers) {
-                                          accessor.notifySubscribers(property.value, oldValue);
-                                        }
-                                      } catch (accessorError) {
-                                        // Continue if accessor approach fails
+                              const platform = customElement.controller.container.get('IPlatform');
+                              const observationLocator = customElement.controller.container.get('IObservationLocator', true);
+                              if (platform) {
+                                platform.queueMicrotask(() => {
+                                  if (observationLocator) {
+                                    try {
+                                      const accessor = observationLocator.getAccessor(instance, propertyName);
+                                      if (accessor && accessor.setValue) {
+                                        accessor.setValue(property.value, instance, propertyName);
+                                      } else if (accessor && accessor.notifySubscribers) {
+                                        accessor.notifySubscribers(property.value, oldValue);
                                       }
-                                    }
+                                    } catch {}
+                                  }
 
-                                    // Method 2b: Force binding updates on related bindings
-                                    if (customElement.bindings) {
-                                      customElement.bindings.forEach(binding => {
-                                        try {
-                                          // Check if binding is related to our property
-                                          if (binding.sourceExpression && 
-                                              (binding.sourceExpression.name === propertyName || 
-                                               binding.sourceExpression.toString().includes(propertyName))) {
-                                            if (binding.updateTarget) {
-                                              binding.updateTarget(property.value);
-                                            } else if (binding.callBinding) {
-                                              binding.callBinding();
-                                            }
-                                          }
-                                        } catch (bindingError) {
-                                          // Continue on binding errors
+                                  // Nudge related bindings
+                                  if (customElement.bindings) {
+                                    customElement.bindings.forEach(binding => {
+                                      try {
+                                        if (binding.sourceExpression &&
+                                            (binding.sourceExpression.name === propertyName ||
+                                             String(binding.sourceExpression).includes(propertyName))) {
+                                          if (binding.updateTarget) binding.updateTarget(property.value);
+                                          else if (binding.callBinding) binding.callBinding();
                                         }
-                                      });
-                                    }
-                                  });
-                                }
-                              } catch (containerError) {
-                                // Continue if container approach fails
+                                      } catch {}
+                                    });
+                                  }
+                                });
                               }
-                            }
-
-                            // Method 3: Force DOM update and dispatch change event
-                            Promise.resolve().then(() => {
-                              // Dispatch property change event for any listeners
-                              element.dispatchEvent(new CustomEvent('aurelia:property-changed', {
-                                detail: { property: propertyName, oldValue, newValue: property.value },
-                                bubbles: true
-                              }));
-
-                              // Also dispatch a generic change event
-                              element.dispatchEvent(new Event('change', { bubbles: true }));
-                              
-                              // Force form control updates if any
-                              const formControls = element.querySelectorAll('input, select, textarea');
-                              formControls.forEach(control => {
-                                if (control.value !== undefined) {
-                                  control.dispatchEvent(new Event('input', { bubbles: true }));
-                                  control.dispatchEvent(new Event('change', { bubbles: true }));
-                                }
-                              });
-                            });
-
-                            break;
+                            } catch {}
                           }
+
+                          // Dispatch change events as a last resort
+                          Promise.resolve().then(() => {
+                            element.dispatchEvent(new CustomEvent('aurelia:property-changed', {
+                              detail: { property: propertyName, oldValue, newValue: property.value },
+                              bubbles: true
+                            }));
+                            element.dispatchEvent(new Event('change', { bubbles: true }));
+                            const formControls = element.querySelectorAll('input, select, textarea');
+                            formControls.forEach(control => {
+                              if (control.value !== undefined) {
+                                control.dispatchEvent(new Event('input', { bubbles: true }));
+                                control.dispatchEvent(new Event('change', { bubbles: true }));
+                              }
+                            });
+                          });
+
+                          break;
                         }
                       }
                     } catch (triggerError) {
@@ -296,7 +289,7 @@ export class DebugHost implements ICustomElementViewModel {
                     return false;
                   }
                 } else {
-                  console.warn('Property not found on instance:', propertyName, instance);
+                  console.warn('Property not found on instance or invalid name:', propertyName, instance);
                   return false;
                 }
               } else {
