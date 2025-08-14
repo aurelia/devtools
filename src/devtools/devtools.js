@@ -1,7 +1,7 @@
 let panelCreated = false;
 let detectedVersion = null;
 
-// Always create the panel immediately 
+// Always create the panel immediately
 function createAureliaPanel() {
   if (panelCreated) return;
 
@@ -19,6 +19,9 @@ function createAureliaPanel() {
       chrome.devtools.inspectedWindow.eval(`
         window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'checking';
       `);
+
+  // Proactively install hooks when the panel opens
+  chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
     }
   );
 }
@@ -27,6 +30,7 @@ function createAureliaPanel() {
 function updateDetectionState(version) {
   if (panelCreated) {
     chrome.devtools.inspectedWindow.eval(`
+  window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = ${version};
       window.__AURELIA_DEVTOOLS_VERSION__ = ${version};
       window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'detected';
     `);
@@ -133,29 +137,21 @@ function install(debugValueLookup) {
       ].filter((x) => x);
     },
     updateValues: (info, property) => {
-      if (!hooks.currentElement && !hooks.currentAttributes.length) return;
+      if (property && property.debugId && debugValueLookup[property.debugId]) {
+        const debugItem = debugValueLookup[property.debugId];
+        const instance = debugItem.instance;
+        const propertyName = property.name;
 
-      const currentInfo =
-        hooks.currentElement?.definition.key === info.key
-          ? hooks.currentElement
-          : hooks.currentAttributes.find((y) => y.definition.key === info.key);
-
-      info.bindables.forEach((x) => (currentInfo.viewModel[x.name] = x.value));
-      info.properties.forEach((x) => {
-        // HMM: Not sure if we need the .value check
-        const isObject = x.value === "Object" && x.type === "object";
-        if (isObject) {
-          let targetProp = currentInfo.viewModel[x.name][property.name];
-          if (!targetProp) return;
-
-          currentInfo.viewModel[x.name][property.name] = property.value;
-
-          return;
+        if (instance && propertyName) {
+          try {
+            instance[propertyName] = property.value;
+            return true;
+          } catch (error) {
+            return false;
+          }
         }
-
-        currentInfo.viewModel[x.name] = x.value;
-      });
-      return property;
+      }
+      return false;
     },
     getCustomElementInfo: (element, traverse = true) => {
       let customElement;
@@ -169,7 +165,7 @@ function install(debugValueLookup) {
           const auV2 = element["$au"];
           if (auV2) {
             customElement = auV2["au:resource:custom-element"];
-            
+
             // Look for custom attributes with various patterns
             const customAttributeKeys = Object.getOwnPropertyNames(auV2).filter(
               (key) => {
@@ -185,7 +181,7 @@ function install(debugValueLookup) {
                 if (key.match(/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/)) {
                   const controller = auV2[key];
                   // Verify it looks like a controller with definition/viewModel
-                  if (controller && typeof controller === 'object' && 
+                  if (controller && typeof controller === 'object' &&
                       (controller.definition || controller.viewModel || controller.behavior)) {
                     return true;
                   }
@@ -193,7 +189,7 @@ function install(debugValueLookup) {
                 return false;
               }
             );
-            
+
             customAttributes = customAttributeKeys.map((x) => auV2[x]).filter(attr => attr != null);
           }
           // Try Aurelia v1
@@ -333,13 +329,13 @@ function install(debugValueLookup) {
             // Check custom element
             if (auV1.controller && componentInfo.customElementInfo) {
               const controller = auV1.controller;
-              if (controller.behavior && 
+              if (controller.behavior &&
                   ((controller.behavior.elementName === componentInfo.customElementInfo.name) ||
                    (controller.behavior.attributeName === componentInfo.customElementInfo.name))) {
                 return element;
               }
             }
-            
+
             // Check custom attributes
             if (componentInfo.customAttributesInfo) {
               const tagName = element.tagName ? element.tagName.toLowerCase() : null;
@@ -431,7 +427,7 @@ function install(debugValueLookup) {
       else if (controller.viewModel || controller.bindingContext) {
         const viewModel = controller.viewModel || controller.bindingContext;
         const name = controller.name || controller.constructor?.name || 'unknown';
-        
+
         return {
           bindables: [],
           properties: Object.keys(viewModel)
@@ -483,7 +479,7 @@ function install(debugValueLookup) {
         key: 'error',
       };
     }
-    
+
     return null;
   }
   function getValueFor(value) {
@@ -865,5 +861,10 @@ const hooksAsStringv2 = `
   `;
 
 chrome.runtime.onConnect.addListener((port) => {
+  chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
+});
+
+// Also re-install hooks on navigation to handle SPA reloads and page loads
+chrome.devtools.network.onNavigated.addListener(() => {
   chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
 });

@@ -55,12 +55,10 @@ export class App implements ICustomElementViewModel {
     // Check detection state set by devtools.js
     this.checkDetectionState();
 
-    // Delay component loading to allow Aurelia detection system to initialize
+    // Delay component loading to allow Aurelia hooks to install, then try regardless of detection flags
     setTimeout(() => {
       this.checkDetectionState();
-      if (this.aureliaDetected) {
-        this.loadAllComponents();
-      }
+      this.loadAllComponents();
     }, 1000);
 
     // Poll for detection state changes
@@ -75,12 +73,12 @@ export class App implements ICustomElementViewModel {
     if (chrome && chrome.devtools) {
       chrome.devtools.inspectedWindow.eval(
         `({
-          state: window.__AURELIA_DEVTOOLS_DETECTION_STATE__, 
+          state: window.__AURELIA_DEVTOOLS_DETECTION_STATE__,
           version: window.__AURELIA_DEVTOOLS_VERSION__
         })`,
         (result: {state: string, version: number}, isException?: any) => {
           if (!isException && result) {
-            
+
             switch (result.state) {
               case 'detected':
                 this.aureliaDetected = true;
@@ -107,7 +105,8 @@ export class App implements ICustomElementViewModel {
     // Poll for detection state changes every 2 seconds
     setInterval(() => {
       this.checkDetectionState();
-      if (this.aureliaDetected && !this.allAureliaObjects?.length) {
+      // Keep trying to load until we find components, regardless of detection flags
+      if (!this.allAureliaObjects?.length) {
         this.loadAllComponents();
       }
     }, 2000);
@@ -136,13 +135,13 @@ export class App implements ICustomElementViewModel {
           .then((components) => {
             this.allAureliaObjects = components || [];
             this.buildComponentTree(components || []);
-            
+
             // Update detection status based on whether we got components
             if (components && components.length > 0) {
               this.aureliaDetected = true;
               this.detectionState = 'detected';
             }
-            
+
             resolve();
           })
           .catch((error) => {
@@ -164,7 +163,7 @@ export class App implements ICustomElementViewModel {
   get filteredComponentTreeByTab(): ComponentNode[] {
     // First apply tab filtering to the full tree
     let tabFilteredTree: ComponentNode[];
-    
+
     switch (this.activeTab) {
       case 'components':
         tabFilteredTree = this.filterTreeByType(this.componentTree, 'custom-element');
@@ -177,12 +176,12 @@ export class App implements ICustomElementViewModel {
         tabFilteredTree = this.componentTree;
         break;
     }
-    
+
     // Then apply search filtering to the tab-filtered tree
     if (!this.searchQuery.trim()) {
       return tabFilteredTree;
     }
-    
+
     const query = this.searchQuery.toLowerCase();
     return this.filterComponentTree(tabFilteredTree, query);
   }
@@ -240,7 +239,17 @@ export class App implements ICustomElementViewModel {
             component.customAttributesInfo &&
             component.customAttributesInfo.length > 0
           ) {
-            component.customAttributesInfo.forEach((attr, attrIndex) => {
+            // Filter out any attribute that accidentally matches the element's key/name
+            const filteredAttrs = component.customAttributesInfo.filter(attr => {
+              try {
+                if (!attr) return false;
+                const sameKey = !!(attr.key && elementInfo.key && attr.key === elementInfo.key);
+                const sameName = !!(attr.name && elementInfo.name && attr.name === elementInfo.name);
+                return !(sameKey || sameName);
+              } catch { return true; }
+            });
+
+            filteredAttrs.forEach((attr, attrIndex) => {
               const attrNode: ComponentNode = {
                 id: `${elementId}-attr-${attrIndex}`,
                 name: attr.name || `unknown-attribute`,
@@ -262,7 +271,9 @@ export class App implements ICustomElementViewModel {
         component.customAttributesInfo.length > 0
       ) {
         // Process standalone Custom Attributes (without a parent element)
-        component.customAttributesInfo.forEach((attr, attrIndex) => {
+        component.customAttributesInfo
+          .filter(attr => !!attr)
+          .forEach((attr, attrIndex) => {
           const standaloneAttrNode: ComponentNode = {
             id: `standalone-attr-${index}-${attrIndex}`,
             name: attr.name || `unknown-attribute`,
@@ -300,7 +311,17 @@ export class App implements ICustomElementViewModel {
       } else {
         // For custom elements, use the existing logic
         this.selectedElement = component.data.customElementInfo || null;
-        this.selectedElementAttributes = component.data.customAttributesInfo || [];
+        // Apply the same filtering logic used in tree creation to prevent duplicates
+        const elementInfo = component.data.customElementInfo;
+        const rawAttributes = component.data.customAttributesInfo || [];
+        this.selectedElementAttributes = rawAttributes.filter(attr => {
+          try {
+            if (!attr) return false;
+            const sameKey = !!(attr.key && elementInfo.key && attr.key === elementInfo.key);
+            const sameName = !!(attr.name && elementInfo.name && attr.name === elementInfo.name);
+            return !(sameKey || sameName);
+          } catch { return true; }
+        });
       }
 
       // No longer switch tabs - details will show in the right panel
