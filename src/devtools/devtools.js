@@ -6,7 +6,7 @@ function createAureliaPanel() {
   if (panelCreated) return;
 
   const panelHtml = "index.html";
-  const panelTitle = "⚡ Aurelia";
+  const panelTitle = "Aurelia";
 
   chrome.devtools.panels.create(
     panelTitle,
