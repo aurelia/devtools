@@ -1,5 +1,6 @@
 let panelCreated = false;
 let detectedVersion = null;
+let elementsSidebarPane = null;
 
 // Always create the panel immediately
 function createAureliaPanel() {
@@ -26,6 +27,44 @@ function createAureliaPanel() {
   );
 }
 
+// Create an Elements sidebar to show Aurelia info for $0
+function createElementsSidebar() {
+  if (!chrome?.devtools?.panels?.elements?.createSidebarPane) return;
+  if (elementsSidebarPane) return;
+
+  chrome.devtools.panels.elements.createSidebarPane('Aurelia', function(pane) {
+    elementsSidebarPane = pane;
+
+    const updateSidebar = () => {
+      if (!elementsSidebarPane) return;
+      const expr = `(() => {
+        try {
+          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || !hook.getCustomElementInfo) {
+            return { status: 'no-hook', message: 'Aurelia DevTools hook not available' };
+          }
+          const info = hook.getCustomElementInfo($0, true);
+          if (!info || (!info.customElementInfo && (!info.customAttributesInfo || !info.customAttributesInfo.length))) {
+            return { status: 'no-selection', message: 'Selected node is not an Aurelia component/attribute' };
+          }
+          return { status: 'ok', ...info };
+        } catch (e) { return { status: 'error', message: String(e && e.message || e) }; }
+      })()`;
+      try {
+        elementsSidebarPane.setExpression(expr, 'Aurelia');
+      } catch (e) {
+        // Fallback to setObject with a small message
+        elementsSidebarPane.setObject({ message: 'Unable to evaluate Aurelia info' }, 'Aurelia');
+      }
+    };
+
+    // Keep sidebar in sync with $0
+    try { pane.onShown.addListener(updateSidebar); } catch {}
+    chrome.devtools.panels.elements.onSelectionChanged.addListener(updateSidebar);
+    updateSidebar();
+  });
+}
+
 // Update detection state when version is detected
 function updateDetectionState(version) {
   if (panelCreated) {
@@ -39,6 +78,7 @@ function updateDetectionState(version) {
 
 // Create panel immediately when devtools opens
 createAureliaPanel();
+createElementsSidebar();
 
 // Listen for Aurelia detection messages
 chrome.runtime.onMessage.addListener((req, sender) => {
@@ -391,6 +431,8 @@ function install(debugValueLookup) {
           name: controller.definition.name,
           aliases: controller.definition.aliases || [],
           key: controller.definition.key,
+          // Expose controller internals for inspection (exclude viewModel to avoid duplication)
+          controller: convertObjectToDebugInfo(controller, { viewModel: true })
         };
       }
       // Handle Aurelia v1 (both custom elements and custom attributes)
@@ -421,6 +463,7 @@ function install(debugValueLookup) {
           name: behavior.elementName || behavior.attributeName,
           aliases: [],
           key: behavior.elementName || behavior.attributeName,
+          controller: convertObjectToDebugInfo(controller, { viewModel: true })
         };
       }
       // Handle edge cases where controller has different structure
@@ -606,13 +649,15 @@ function install(debugValueLookup) {
       properties: getDebugPropertyKeys(obj)
         .filter((x) => !(x in blackList))
         .map((x) => {
-          return setValueOnDebugInfo(
-            {
-              name: x,
-            },
-            obj[x],
-            obj
-          );
+          try {
+            return setValueOnDebugInfo(
+              { name: x },
+              obj[x],
+              obj
+            );
+          } catch (e) {
+            return { name: x, type: 'error', value: 'unavailable' };
+          }
         }),
     };
   }
@@ -831,7 +876,10 @@ function install(debugValueLookup) {
   function getDebugPropertyKeys(obj) {
     let props = [];
 
-    const keys = [...Object.keys(obj), ...Object.getOwnPropertyNames(obj)];
+    if (!obj || (typeof obj !== 'object' && typeof obj !== 'function')) return props;
+    let keys = [];
+    try { keys = keys.concat(Object.keys(obj)); } catch {}
+    try { keys = keys.concat(Object.getOwnPropertyNames(obj)); } catch {}
     const uniqueKeys = keys.filter((value, i, arr) => arr.indexOf(value) === i);
 
     for (const key of uniqueKeys) {

@@ -31,6 +31,10 @@ export class App implements ICustomElementViewModel {
   selectedComponentId: string = undefined;
   searchQuery: string = '';
   isElementPickerActive: boolean = false;
+  // Preference: follow Chrome Elements selection automatically
+  followChromeSelection: boolean = true;
+  // UI: animate refresh icon when user-triggered refresh happens
+  isRefreshing: boolean = false;
 
   // Detection status
   aureliaDetected: boolean = false;
@@ -51,6 +55,12 @@ export class App implements ICustomElementViewModel {
 
     // Initialize filtered tree
     this.filteredComponentTree = [];
+
+    // Restore persisted preference for following Elements selection
+    try {
+      const persisted = localStorage.getItem('au-devtools.followChromeSelection');
+      if (persisted != null) this.followChromeSelection = persisted === 'true';
+    } catch {}
 
     // Check detection state set by devtools.js
     this.checkDetectionState();
@@ -152,6 +162,17 @@ export class App implements ICustomElementViewModel {
           });
       });
     });
+  }
+
+  // User-triggered refresh with spinner animation
+  refreshComponents() {
+    if (this.isRefreshing) return;
+    this.isRefreshing = true;
+    this.loadAllComponents()
+      .finally(() => {
+        // Allow a short delay so the animation is visible even on fast refresh
+        setTimeout(() => (this.isRefreshing = false), 300);
+      });
   }
 
   public buildComponentTree(components: AureliaInfo[]) {
@@ -307,14 +328,18 @@ export class App implements ICustomElementViewModel {
         // For custom attributes, show the attribute info as the selected element
         // and clear any additional attributes since this IS the attribute
         this.selectedElement = component.data.customAttributesInfo?.[0] || null;
+        this.selectedElement.bindables = this.selectedElement?.bindables || [];
+        this.selectedElement.properties = this.selectedElement?.properties || [];
         this.selectedElementAttributes = [];
       } else {
         // For custom elements, use the existing logic
         this.selectedElement = component.data.customElementInfo || null;
+        this.selectedElement.bindables = this.selectedElement?.bindables || [];
+        this.selectedElement.properties = this.selectedElement?.properties || [];
         // Apply the same filtering logic used in tree creation to prevent duplicates
         const elementInfo = component.data.customElementInfo;
         const rawAttributes = component.data.customAttributesInfo || [];
-        this.selectedElementAttributes = rawAttributes.filter(attr => {
+        this.selectedElementAttributes = (rawAttributes || []).filter(attr => {
           try {
             if (!attr) return false;
             const sameKey = !!(attr.key && elementInfo.key && attr.key === elementInfo.key);
@@ -421,8 +446,8 @@ export class App implements ICustomElementViewModel {
     const foundComponent = this.findComponentInTreeByInfo(componentInfo);
     if (foundComponent) {
       this.selectedComponentId = foundComponent.id;
-      this.selectedElement = foundComponent.data.customElementInfo;
-      this.selectedElementAttributes = foundComponent.data.customAttributesInfo;
+      this.selectedElement = foundComponent.data.customElementInfo || (foundComponent.data.customAttributesInfo?.[0] ?? null);
+      this.selectedElementAttributes = foundComponent.data.customAttributesInfo || [];
     } else {
       // If not found, refresh components and try again
       this.loadAllComponents().then(() => {
@@ -430,13 +455,29 @@ export class App implements ICustomElementViewModel {
           this.findComponentInTreeByInfo(componentInfo);
         if (foundComponentAfterRefresh) {
           this.selectedComponentId = foundComponentAfterRefresh.id;
-          this.selectedElement =
-            foundComponentAfterRefresh.data.customElementInfo;
-          this.selectedElementAttributes =
-            foundComponentAfterRefresh.data.customAttributesInfo;
+          this.selectedElement = foundComponentAfterRefresh.data.customElementInfo || (foundComponentAfterRefresh.data.customAttributesInfo?.[0] ?? null);
+          this.selectedElementAttributes = foundComponentAfterRefresh.data.customAttributesInfo || [];
         }
       });
     }
+  }
+
+  toggleFollowChromeSelection() {
+    this.followChromeSelection = !this.followChromeSelection;
+    try {
+      localStorage.setItem('au-devtools.followChromeSelection', String(this.followChromeSelection));
+    } catch {}
+  }
+
+  revealInElements() {
+    const node = this.findComponentById(this.selectedComponentId);
+    if (!node) return;
+    const info = node.data;
+    this.debugHost.revealInElements({
+      name: node.name,
+      type: node.type,
+      ...info,
+    });
   }
 
   private findComponentInTreeByInfo(
@@ -571,6 +612,10 @@ export class App implements ICustomElementViewModel {
   refreshPropertyBindings() {
     // Force Aurelia to re-render property bindings by updating object references
     if (this.selectedElement) {
+      // Ensure arrays exist to avoid template errors
+      this.selectedElement.bindables = this.selectedElement.bindables || [];
+      this.selectedElement.properties = this.selectedElement.properties || [];
+
       // Update the bindables array reference to trigger change detection
       if (this.selectedElement.bindables) {
         this.selectedElement.bindables = [...this.selectedElement.bindables];
@@ -616,21 +661,29 @@ export class App implements ICustomElementViewModel {
             return;
           }
 
+          // No-op: remove debug logging after verification
+
           property.expandedValue = result;
           property.isExpanded = true;
 
           // Force UI update without calling refreshPropertyBindings to avoid conflicts with editing
           this.plat.queueMicrotask(() => {
             // Trigger change detection by updating the property reference
-            // Handle first-level properties
-            if (this.selectedElement?.bindables?.includes(property)) {
-              const index = this.selectedElement.bindables.indexOf(property);
-              this.selectedElement.bindables[index] = { ...property };
-            }
-            if (this.selectedElement?.properties?.includes(property)) {
-              const index = this.selectedElement.properties.indexOf(property);
-              this.selectedElement.properties[index] = { ...property };
-            }
+          // Handle first-level properties
+          if (this.selectedElement?.bindables?.includes(property)) {
+            const index = this.selectedElement.bindables.indexOf(property);
+            this.selectedElement.bindables[index] = { ...property };
+          }
+          if (this.selectedElement?.properties?.includes(property)) {
+            const index = this.selectedElement.properties.indexOf(property);
+            this.selectedElement.properties[index] = { ...property };
+          }
+          // Handle controller top-level properties
+          if ((this.selectedElement as any)?.controller?.properties?.includes?.(property)) {
+            const arr = (this.selectedElement as any).controller.properties as any[];
+            const index = arr.indexOf(property);
+            if (index !== -1) arr[index] = { ...property };
+          }
 
             // Handle nested properties - find parent and update its expanded value
             this.updateNestedPropertyReference(property);
@@ -670,12 +723,12 @@ export class App implements ICustomElementViewModel {
       return false;
     };
 
-    // Check in both bindables and properties
-    if (this.selectedElement?.bindables) {
-      updateInArray(this.selectedElement.bindables);
-    }
-    if (this.selectedElement?.properties) {
-      updateInArray(this.selectedElement.properties);
+    // Check in bindables, properties, and controller properties (for deeper nesting)
+    if (this.selectedElement) {
+      updateInArray(this.selectedElement.bindables || []);
+      updateInArray(this.selectedElement.properties || []);
+      // Include controller internals if present
+      updateInArray((this.selectedElement as any)?.controller?.properties || []);
     }
   }
 }
