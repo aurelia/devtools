@@ -1,0 +1,186 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Is this a prerelease?'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ inputs.version }}"
+          if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Version must be in format X.Y.Z (e.g., 1.0.0)"
+            exit 1
+          fi
+
+      - name: Update versions
+        run: |
+          VERSION="${{ inputs.version }}"
+          
+          # Update package.json
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          
+          # Update manifest.json
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            manifest.version = '$VERSION';
+            fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+          "
+
+      - name: Run full test suite
+        run: |
+          npm run lint
+          npm test
+          npm run build
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            echo "Generating changelog since $LAST_TAG"
+            
+            # Parse conventional commits into categories
+            FEATURES=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep "^feat" | sed 's/^feat(\([^)]*\)): /- **\1**: /' | sed 's/^feat: /- /')
+            FIXES=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep "^fix" | sed 's/^fix(\([^)]*\)): /- **\1**: /' | sed 's/^fix: /- /')
+            CHORES=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep "^chore" | sed 's/^chore(\([^)]*\)): /- **\1**: /' | sed 's/^chore: /- /')
+            DOCS=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep "^docs" | sed 's/^docs(\([^)]*\)): /- **\1**: /' | sed 's/^docs: /- /')
+            STYLES=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep "^style" | sed 's/^style(\([^)]*\)): /- **\1**: /' | sed 's/^style: /- /')
+            REFACTORS=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep "^refactor" | sed 's/^refactor(\([^)]*\)): /- **\1**: /' | sed 's/^refactor: /- /')
+            TESTS=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep "^test" | sed 's/^test(\([^)]*\)): /- **\1**: /' | sed 's/^test: /- /')
+            OTHER=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s" --no-merges | grep -v "^feat\|^fix\|^chore\|^docs\|^style\|^refactor\|^test" | sed 's/^/- /')
+          else
+            echo "No previous tags found. This appears to be the first release."
+            FEATURES=""
+            FIXES=""
+            CHORES=""
+            DOCS=""
+            STYLES=""
+            REFACTORS=""
+            TESTS=""
+            OTHER=$(git log --pretty=format:"- %s" --no-merges | head -10)
+          fi
+          
+          # Save to file for PR description
+          cat > release-notes.md << EOF
+          ## Changes in v${{ inputs.version }}
+          
+          EOF
+          
+          if [ -n "$FEATURES" ]; then
+            echo "### 🚀 Features" >> release-notes.md
+            echo "$FEATURES" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [ -n "$FIXES" ]; then
+            echo "### 🐛 Bug Fixes" >> release-notes.md
+            echo "$FIXES" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [ -n "$REFACTORS" ]; then
+            echo "### ♻️ Refactoring" >> release-notes.md
+            echo "$REFACTORS" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [ -n "$STYLES" ]; then
+            echo "### 💄 Styling" >> release-notes.md
+            echo "$STYLES" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [ -n "$DOCS" ]; then
+            echo "### 📚 Documentation" >> release-notes.md
+            echo "$DOCS" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [ -n "$TESTS" ]; then
+            echo "### 🧪 Testing" >> release-notes.md
+            echo "$TESTS" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [ -n "$CHORES" ]; then
+            echo "### 🔧 Maintenance" >> release-notes.md
+            echo "$CHORES" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [ -n "$OTHER" ]; then
+            echo "### 📝 Other Changes" >> release-notes.md
+            echo "$OTHER" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          cat >> release-notes.md << EOF
+          ## Installation
+          
+          This extension will be available on the Chrome Web Store after review.
+          
+          ## Development
+          
+          To install from source:
+          1. Download the release ZIP file
+          2. Extract it to a folder
+          3. Open Chrome and go to \`chrome://extensions/\`
+          4. Enable "Developer mode"
+          5. Click "Load unpacked" and select the extracted folder
+          EOF
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: prepare release v${{ inputs.version }}"
+          title: "🚀 Prepare release v${{ inputs.version }}"
+          body-path: release-notes.md
+          branch: "release/v${{ inputs.version }}"
+          delete-branch: true
+
+      - name: Output next steps
+        run: |
+          echo "✅ Release preparation complete!"
+          echo ""
+          echo "Next steps:"
+          echo "1. Review and merge the created pull request"
+          echo "2. Create a GitHub release with tag v${{ inputs.version }}"
+          echo "3. The Chrome Web Store deployment will run automatically"
+          echo ""
+          echo "Required secrets for deployment:"
+          echo "- CHROME_EXTENSION_ID"
+          echo "- CHROME_CLIENT_ID" 
+          echo "- CHROME_CLIENT_SECRET"
+          echo "- CHROME_REFRESH_TOKEN"

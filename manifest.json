@@ -48,8 +48,7 @@
     "service_worker": "build/background.js"
   },
   "permissions": [
-    "activeTab",
-    "scripting"
+    "activeTab"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self';"

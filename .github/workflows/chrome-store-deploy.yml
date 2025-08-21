@@ -1,0 +1,113 @@
+name: Deploy to Chrome Web Store
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., 1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"  # Remove 'v' prefix if present
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Deploying version: $VERSION"
+
+      - name: Update version in package.json and manifest.json
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # Update package.json
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          
+          # Update manifest.json
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            manifest.version = '$VERSION';
+            fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+          "
+          
+          echo "Updated to version: $VERSION"
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Verify build output
+        run: |
+          echo "Build contents:"
+          ls -la dist/
+          echo ""
+          echo "Manifest version in dist:"
+          cat dist/manifest.json | grep '"version"'
+
+      - name: Create ZIP package
+        run: |
+          cd dist
+          zip -r ../aurelia-devtools-${{ steps.version.outputs.version }}.zip .
+          cd ..
+          echo "Package size: $(du -h aurelia-devtools-${{ steps.version.outputs.version }}.zip)"
+
+      - name: Upload to Chrome Web Store
+        uses: mnao305/chrome-extension-upload@v5.0.0
+        with:
+          file-path: aurelia-devtools-${{ steps.version.outputs.version }}.zip
+          extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
+          client-id: ${{ secrets.CHROME_CLIENT_ID }}
+          client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
+          refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          publish: true
+
+      - name: Upload ZIP as release asset
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./aurelia-devtools-${{ steps.version.outputs.version }}.zip
+          asset_name: aurelia-devtools-${{ steps.version.outputs.version }}.zip
+          asset_content_type: application/zip
+
+      - name: Commit version updates
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add package.json package-lock.json manifest.json
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}" || exit 0
+          git push
