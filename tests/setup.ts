@@ -1,4 +1,16 @@
 /* globals, mocks, and helpers for Jest */
+let warnSpy: jest.SpyInstance | undefined;
+let errorSpy: jest.SpyInstance | undefined;
+
+beforeEach(() => {
+  warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  warnSpy?.mockRestore();
+  errorSpy?.mockRestore();
+});
 
 declare global {
   // eslint-disable-next-line no-var
