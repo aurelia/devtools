@@ -22,6 +22,8 @@ A browser extension for debugging Aurelia 1 and 2 applications. Features a top-l
 - **Professional Interface**: Clean, modern design matching Chrome DevTools aesthetics
 - **Real-time Updates**: Refresh functionality to re-scan components
 - **Dark/Light Theme Support**: Adapts to Chrome DevTools theme preferences
+ - **Elements Sidebar Integration**: Optional Aurelia sidebar in the Elements panel showing the selected node's Aurelia info
+ - **Selection Sync**: Toggle to auto-sync the Aurelia panel selection with the Elements panel ($0). Includes a "Reveal in Elements" action
 
 ## Installation
 
@@ -111,14 +113,114 @@ src/
 - V1 and V2 feature parity is still in development
 - Some advanced Aurelia features may not be fully supported yet
 
+## Release Process
+
+### Automated Deployment
+
+The project uses GitHub Actions for automated Chrome Web Store deployment:
+
+1. **Prepare Release** (Manual Workflow):
+   ```bash
+   # Local preparation
+   ./scripts/prepare-release.sh
+   
+   # Or use GitHub workflow:
+   # Go to Actions > "Prepare Release" > Run workflow
+   ```
+
+2. **Create GitHub Release**:
+   - Tag format: `v1.2.3` (semantic versioning)
+   - Triggers automatic Chrome Web Store deployment
+   - Includes conventional commit changelog generation
+
+3. **Chrome Web Store**:
+   - Extension automatically uploaded and published
+   - Review process typically takes 1-3 business days
+
+### Version Management
+
+We follow [semantic versioning](https://semver.org/) with conventional commits:
+
+- **MAJOR** (2.0.0): Breaking changes (`feat!:`, `fix!:`)
+- **MINOR** (1.1.0): New features (`feat(scope): description`)  
+- **PATCH** (1.0.1): Bug fixes (`fix(scope): description`)
+
+### Commit Message Format
+
+Use conventional commits for automatic changelog generation:
+
+```bash
+feat(inspector): add property editing functionality
+fix(detector): improve aurelia v2 detection reliability
+docs(readme): update installation instructions
+style(devtools): remove emoji from panel title
+refactor(debug): improve property update handling
+test(components): add unit tests for property-view
+chore(deps): update aurelia to v2.0.0-beta.25
+```
+
+### Release Workflow
+
+```bash
+# 1. Prepare release (runs tests, builds, shows changelog)
+./scripts/prepare-release.sh
+
+# 2. Create GitHub release
+git tag v1.2.3
+git push origin v1.2.3
+
+# 3. Create release on GitHub.com with tag v1.2.3
+# 4. Deployment happens automatically via GitHub Actions
+```
+
+### Required GitHub Secrets
+
+For automated deployment, configure these repository secrets:
+
+- `CHROME_EXTENSION_ID` - Extension ID from Chrome Web Store
+- `CHROME_CLIENT_ID` - Google OAuth Client ID  
+- `CHROME_CLIENT_SECRET` - Google OAuth Client Secret
+- `CHROME_REFRESH_TOKEN` - Generated refresh token
+
+See [deployment documentation](docs/deployment.md) for detailed setup instructions.
+
 ## Contributing
 
+### Development Workflow
+
+1. **Clone and setup**:
+   ```bash
+   git clone https://github.com/aurelia/devtools.git
+   cd devtools
+   npm install
+   ```
+
+2. **Development**:
+   ```bash
+   npm run start  # Watch mode
+   # Load extension in Chrome, make changes, reload extension
+   ```
+
+3. **Quality checks**:
+   ```bash
+   npm run lint   # Code quality
+   npm test       # Unit tests
+   npm run build  # Production build
+   ```
+
+4. **Conventional commits**:
+   ```bash
+   git commit -m "feat(scope): add new feature"
+   git commit -m "fix(scope): resolve bug"
+   ```
+
 ### Submitting Changes
-- Ensure all tests pass: `npm test`
-- Run linting: `npm run lint` 
-- Build the project: `npm run build`
-- Include built files in `/dist` when committing
-- Follow the existing code style and patterns
+
+- ✅ Use conventional commit format
+- ✅ Ensure all tests pass: `npm test`
+- ✅ Run linting: `npm run lint` 
+- ✅ Build successfully: `npm run build`
+- ✅ Follow existing code style and patterns
 
 ### Development Notes
 - The extension uses Chrome's message passing for communication
