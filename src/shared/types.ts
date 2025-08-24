@@ -25,6 +25,7 @@ export interface IControllerInfo {
   key: CustomElementDefinition['key'] | CustomAttributeDefinition['key'];
   bindables: Property[];
   properties: Property[];
+  controller?: { properties: Property[] };
 }
 
 export type AureliaInfo = {

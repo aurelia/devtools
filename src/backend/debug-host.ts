@@ -23,12 +23,22 @@ export class DebugHost implements ICustomElementViewModel {
       });
 
       chrome.devtools.panels.elements.onSelectionChanged.addListener(() => {
+        // Respect consumer preference for following Elements selection
+        if (this.consumer && (this.consumer as any).followChromeSelection === false) {
+          return;
+        }
         chrome.devtools.inspectedWindow.eval(
-          `window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.getCustomElementInfo($0)`,
+          `window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ && window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.getCustomElementInfo($0)`,
           (debugObject: AureliaInfo) => {
-            this.consumer.selectedElement = debugObject?.customElementInfo;
-            this.consumer.selectedElementAttributes =
-              debugObject?.customAttributesInfo;
+            if (!debugObject) return;
+            // Sync the selection in our panel/component tree
+            if (this.consumer && typeof this.consumer.onElementPicked === 'function') {
+              this.consumer.onElementPicked(debugObject);
+            } else {
+              // Fallback: update basic fields
+              this.consumer.selectedElement = debugObject?.customElementInfo;
+              this.consumer.selectedElementAttributes = debugObject?.customAttributesInfo;
+            }
           }
         );
       });
@@ -406,6 +416,27 @@ export class DebugHost implements ICustomElementViewModel {
           }
         }
       );
+    }
+  }
+
+  // Reveal a component's DOM element in the Elements panel
+  revealInElements(componentInfo: any) {
+    if (chrome && chrome.devtools) {
+      const code = `(() => {
+        try {
+          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || !hook.findElementByComponentInfo) return false;
+          const el = hook.findElementByComponentInfo(${JSON.stringify(componentInfo)});
+          if (el) {
+            // Built-in DevTools helper to select and reveal an element
+            // eslint-disable-next-line no-undef
+            inspect(el);
+            return true;
+          }
+          return false;
+        } catch { return false; }
+      })();`;
+      chrome.devtools.inspectedWindow.eval(code);
     }
   }
 }

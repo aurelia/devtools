@@ -18,7 +18,7 @@ export function getAureliaInstance(win): any | undefined {
   return getAureliaV2Instance() || getAureliaV1Instance();
 }
 
-function detectAureliaVersion(): number | null {
+export function detectAureliaVersion(): number | null {
   // Try to detect version based on DOM patterns
   if (document.querySelector('[aurelia-app]') || (window as any).aurelia) {
     return 1;
@@ -29,7 +29,7 @@ function detectAureliaVersion(): number | null {
   return null;
 }
 
-function getAureliaV2Instance(): any | undefined {
+export function getAureliaV2Instance(): any | undefined {
   const all = document.querySelectorAll('*');
   for (let i = 0; i < all.length; i++) {
     const aurelia = (all[i] as any).$aurelia;
@@ -40,7 +40,7 @@ function getAureliaV2Instance(): any | undefined {
   return undefined;
 }
 
-function getAureliaV1Instance(): any | undefined {
+export function getAureliaV1Instance(): any | undefined {
   // For Aurelia v1, there's no single global instance like v2
   // Instead, we look for any element with .au property
   const all = document.querySelectorAll('*');

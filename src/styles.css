@@ -310,6 +310,22 @@
     @apply bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-1 text-xs 
            cursor-pointer text-gray-700 transition-colors;
   }
+
+  .toolbar-button.icon-only {
+    @apply px-1.5 py-1;
+  }
+
+  /* Refresh animation with subtle scale-in */
+  @keyframes spinScale {
+    0%   { transform: scale(0.9) rotate(0deg); }
+    10%  { transform: scale(1.0) rotate(36deg); }
+    100% { transform: scale(1.0) rotate(360deg); }
+  }
+  .toolbar-button.spinning .refresh-icon {
+    animation: spinScale 0.9s linear infinite;
+    transform-origin: 50% 50%;
+    will-change: transform;
+  }
   
   .toolbar-button:hover {
     @apply bg-gray-100 border-gray-300;
@@ -337,6 +353,10 @@
   
   .dark .toolbar-button.active:hover {
     @apply bg-blue-300 border-blue-300;
+  }
+
+  .toggle {
+    @apply flex items-center gap-1 text-xs text-gray-600;
   }
   
   /* Search */
@@ -507,6 +527,15 @@
     @apply mb-4 border border-gray-200 rounded-lg overflow-hidden;
   }
 
+  /* Visual separator between property groups */
+  .properties-separator {
+    @apply my-2 border-t border-gray-200;
+  }
+
+  .dark .properties-separator {
+    @apply border-gray-700;
+  }
+
   .properties-section:first-child {
     @apply mt-0;
   }
@@ -520,7 +549,7 @@
   }
   
   .section-header {
-    @apply bg-gray-50 px-3 py-2 border-b border-gray-200 flex items-center gap-1.5 font-medium 
+    @apply bg-gray-50 px-3 py-1 border-b border-gray-200 flex items-center gap-1.5 font-medium 
            text-xs uppercase tracking-wide;
   }
   
@@ -553,7 +582,7 @@
   }
   
   .property-item {
-    @apply border-b border-gray-100 px-3 py-1.5;
+    @apply border-b border-gray-100 px-3 py-0.5;
   }
   
   .property-item:last-child {
@@ -566,11 +595,12 @@
   
   /* Property Values */
   .property-row {
-    @apply text-xs leading-6;
+    @apply text-xs;
+    line-height: 1.35;
   }
   
   .property-main {
-    @apply flex items-center py-0.5 min-h-5;
+    @apply flex items-center py-0 min-h-4;
   }
   
   .property-name {
@@ -597,7 +627,7 @@
   }
   
   .property-value {
-    @apply cursor-pointer rounded-sm px-0.5 py-0.5 -mx-0.5 -my-0.5 break-words;
+    @apply cursor-pointer rounded-sm px-0.5 py-0 -mx-0.5 -my-0.5 break-words;
     font-family: var(--font-family-mono);
   }
   
@@ -822,7 +852,8 @@
   }
   
   .details-content {
-    @apply flex-1 overflow-y-auto p-4;
+    @apply flex-1 overflow-y-auto p-2;
+    font-size: 11px;
     /* Custom scrollbar styling */
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
