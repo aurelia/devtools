@@ -4,7 +4,7 @@ import {
   ICustomElementViewModel,
   IPlatform,
 } from 'aurelia';
-import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo } from './shared/types';
+import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, Property } from './shared/types';
 import { resolve } from '@aurelia/kernel';
 
 export class App implements ICustomElementViewModel {
@@ -38,6 +38,7 @@ export class App implements ICustomElementViewModel {
   followChromeSelection: boolean = true;
   // UI: animate refresh icon when user-triggered refresh happens
   isRefreshing: boolean = false;
+  propertyRowsRevision: number = 0;
 
   // Detection status
   aureliaDetected: boolean = false;
@@ -324,8 +325,11 @@ export class App implements ICustomElementViewModel {
 
   private createAttributeNode(parentId: string, owner: AureliaComponentTreeNode, attr: IControllerInfo, index: number): ComponentNode {
     const attrName = attr?.name || 'custom-attribute';
+    const ownerIdentifier = String(owner?.id || owner?.domPath || parentId || 'attr-owner');
+    const attrIdentifier = String(attr?.key || attr?.name || `attr-${index}`);
+    const nodeId = `${ownerIdentifier}::${attrIdentifier}::${index}`;
     return {
-      id: `${parentId}::attr-${index}`,
+      id: nodeId,
       name: attrName,
       type: 'custom-attribute',
       domPath: owner?.domPath || '',
@@ -521,6 +525,7 @@ export class App implements ICustomElementViewModel {
       this.selectedElement.bindables = this.selectedElement?.bindables || [];
       this.selectedElement.properties = this.selectedElement?.properties || [];
       this.selectedElementAttributes = [];
+      this.markPropertyRowsDirty();
     } else {
       const elementInfo = node.data.info.customElementInfo;
       const attributeInfos = node.data.info.customAttributesInfo || [];
@@ -537,6 +542,7 @@ export class App implements ICustomElementViewModel {
           return true;
         }
       });
+      this.markPropertyRowsDirty();
     }
 
     const path = this.findNodePathById(node.id);
@@ -1009,6 +1015,7 @@ export class App implements ICustomElementViewModel {
         this.selectedElement.properties = [...this.selectedElement.properties];
       }
     }
+    this.markPropertyRowsDirty();
   }
 
   // Object expansion functionality
@@ -1028,6 +1035,7 @@ export class App implements ICustomElementViewModel {
         // Collapsing - just hide the expanded content
         property.isExpanded = false;
       }
+      this.markPropertyRowsDirty();
     } else {
     }
   }
@@ -1052,24 +1060,24 @@ export class App implements ICustomElementViewModel {
           // Force UI update without calling refreshPropertyBindings to avoid conflicts with editing
           this.plat.queueMicrotask(() => {
             // Trigger change detection by updating the property reference
-          // Handle first-level properties
-          if (this.selectedElement?.bindables?.includes(property)) {
-            const index = this.selectedElement.bindables.indexOf(property);
-            this.selectedElement.bindables[index] = { ...property };
-          }
-          if (this.selectedElement?.properties?.includes(property)) {
-            const index = this.selectedElement.properties.indexOf(property);
-            this.selectedElement.properties[index] = { ...property };
-          }
-          // Handle controller top-level properties
-          if ((this.selectedElement as any)?.controller?.properties?.includes?.(property)) {
-            const arr = (this.selectedElement as any).controller.properties as any[];
-            const index = arr.indexOf(property);
-            if (index !== -1) arr[index] = { ...property };
-          }
+            if (this.selectedElement?.bindables?.includes(property)) {
+              const index = this.selectedElement.bindables.indexOf(property);
+              this.selectedElement.bindables[index] = { ...property };
+            }
+            if (this.selectedElement?.properties?.includes(property)) {
+              const index = this.selectedElement.properties.indexOf(property);
+              this.selectedElement.properties[index] = { ...property };
+            }
+            // Handle controller top-level properties
+            if ((this.selectedElement as any)?.controller?.properties?.includes?.(property)) {
+              const arr = (this.selectedElement as any).controller.properties as any[];
+              const index = arr.indexOf(property);
+              if (index !== -1) arr[index] = { ...property };
+            }
 
             // Handle nested properties - find parent and update its expanded value
             this.updateNestedPropertyReference(property);
+            this.markPropertyRowsDirty();
           });
         }
       );
@@ -1114,12 +1122,40 @@ export class App implements ICustomElementViewModel {
       updateInArray((this.selectedElement as any)?.controller?.properties || []);
     }
   }
+
+  private markPropertyRowsDirty() {
+    this.propertyRowsRevision++;
+  }
+
+  getPropertyRows(properties?: Property[], _revision: number = this.propertyRowsRevision): PropertyRow[] {
+    if (!properties || !properties.length) {
+      return [];
+    }
+    return this.flattenProperties(properties, 0);
+  }
+
+  private flattenProperties(properties: Property[], depth: number): PropertyRow[] {
+    const rows: PropertyRow[] = [];
+    for (const prop of properties) {
+      if (!prop) continue;
+      rows.push({ property: prop, depth });
+      if (prop.isExpanded && prop.expandedValue?.properties?.length) {
+        rows.push(...this.flattenProperties(prop.expandedValue.properties, depth + 1));
+      }
+    }
+    return rows;
+  }
 }
 
 interface BreadcrumbSegment {
   id: string;
   label: string;
   type: 'custom-element' | 'custom-attribute';
+}
+
+interface PropertyRow {
+  property: Property;
+  depth: number;
 }
 
 interface ComponentNode {
