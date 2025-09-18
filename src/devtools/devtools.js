@@ -179,6 +179,11 @@ function install(debugValueLookup) {
     debugValueLookup = {};
   }
 
+  const MAP_ENTRY_METADATA_KEY =
+    typeof Symbol === "function"
+      ? Symbol("au-devtools-map-entry")
+      : "__au_devtools_map_entry__";
+
   const hooks = {
     Aurelia: undefined,
     currentElement: undefined,
@@ -343,44 +348,29 @@ function install(debugValueLookup) {
     },
 
     getExpandedDebugValueForId(id) {
-      let value = debugValueLookup[id].expandableValue;
+      let value = debugValueLookup[id]?.expandableValue;
 
       if (Array.isArray(value)) {
-        let newValue = {};
-        value.forEach((value, index) => {
-          newValue[index] = value;
+        const arrayValue = {};
+        value.forEach((item, index) => {
+          arrayValue[index] = item;
         });
-        value = newValue;
-      } else if (isMap(value)) {
-        let mapToArr = [];
-        value = value.forEach((value, key) => {
-          mapToArr.push([value, key]);
-        });
-        value = mapToArr;
-      } else if (isSet(value)) {
-        value = Array.from(value);
+        return convertObjectToDebugInfo(arrayValue);
       }
 
-      const converted = convertObjectToDebugInfo(value);
-      return converted;
+      if (isMapLike(value)) {
+        return convertMapToDebugInfo(value);
+      }
 
-      // https://stackoverflow.com/questions/29924932/how-to-reliably-check-an-object-is-an-ecmascript-6-map-set
-      function isMap(o) {
-        try {
-          Map.prototype.has.call(o); // throws if o is not an object or has no [[MapData]]
-          return true;
-        } catch (e) {
-          return false;
-        }
+      if (isSetLike(value)) {
+        return convertSetToDebugInfo(value);
       }
-      function isSet(o) {
-        try {
-          Set.prototype.has.call(o); // throws if o is not an object or has no [[SetData]]
-          return true;
-        } catch (e) {
-          return false;
-        }
+
+      if (isMapEntryLike(value)) {
+        return convertMapEntryToDebugInfo(value);
       }
+
+      return convertObjectToDebugInfo(value);
     },
 
     findElementByComponentInfo(componentInfo) {
@@ -637,8 +627,166 @@ function install(debugValueLookup) {
     }
   }
 
-  function setValueOnDebugInfo(debugInfo, value, instance) {
+  function isMapLike(o) {
+    if (!o || (typeof o !== "object" && typeof o !== "function")) {
+      return false;
+    }
     try {
+      Map.prototype.has.call(o, undefined);
+      return typeof o.size === "number" && typeof o.forEach === "function";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isSetLike(o) {
+    if (!o || (typeof o !== "object" && typeof o !== "function")) {
+      return false;
+    }
+    try {
+      Set.prototype.has.call(o, undefined);
+      return typeof o.size === "number" && typeof o.forEach === "function";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isMapEntryLike(o) {
+    return !!(o && typeof o === "object" && o[MAP_ENTRY_METADATA_KEY]);
+  }
+
+  function formatPreview(value) {
+    if (value === null) return "null";
+    if (value === undefined) return "undefined";
+    if (value instanceof Node) {
+      return value.constructor?.name || "Node";
+    }
+    if (Array.isArray(value)) {
+      return `Array[${value.length}]`;
+    }
+    if (isMapLike(value)) {
+      return `Map(${value?.size ?? 0})`;
+    }
+    if (isSetLike(value)) {
+      return `Set(${value?.size ?? 0})`;
+    }
+
+    const type = typeof value;
+    switch (type) {
+      case "string":
+        return `"${value}"`;
+      case "number":
+      case "boolean":
+      case "bigint":
+        return String(value);
+      case "symbol":
+        return value.toString();
+      case "function":
+        return value.name ? `function ${value.name}` : "function";
+      case "object":
+        if (value && value.constructor && value.constructor.name) {
+          return value.constructor.name;
+        }
+        return "Object";
+      default:
+        return String(value);
+    }
+  }
+
+  function convertMapToDebugInfo(mapValue) {
+    const properties = [];
+
+    const sizeInfo = setValueOnDebugInfo(
+      { name: "size" },
+      mapValue.size,
+      mapValue,
+      { canEdit: false }
+    );
+    properties.push(sizeInfo);
+
+    let index = 0;
+    mapValue.forEach((entryValue, entryKey) => {
+      const entryObject = { key: entryKey, value: entryValue };
+      try {
+        Object.defineProperty(entryObject, MAP_ENTRY_METADATA_KEY, {
+          value: { key: entryKey },
+          enumerable: false,
+          configurable: false,
+        });
+      } catch {}
+      const preview = `${formatPreview(entryKey)} => ${formatPreview(entryValue)}`;
+      const entryInfo = setValueOnDebugInfo(
+        { name: `[${index}]` },
+        entryObject,
+        mapValue,
+        {
+          displayValue: preview,
+          expandableValue: entryObject,
+          canEdit: false,
+        }
+      );
+      properties.push(entryInfo);
+      index += 1;
+    });
+
+    return { properties };
+  }
+
+  function convertSetToDebugInfo(setValue) {
+    const properties = [];
+
+    const sizeInfo = setValueOnDebugInfo(
+      { name: "size" },
+      setValue.size,
+      setValue,
+      { canEdit: false }
+    );
+    properties.push(sizeInfo);
+
+    let index = 0;
+    setValue.forEach((item) => {
+      const entryInfo = setValueOnDebugInfo(
+        { name: `[${index}]` },
+        item,
+        setValue,
+        {
+          canEdit: false,
+        }
+      );
+      properties.push(entryInfo);
+      index += 1;
+    });
+
+    return { properties };
+  }
+
+  function convertMapEntryToDebugInfo(entryObject) {
+    const properties = [];
+
+    const keyInfo = setValueOnDebugInfo(
+      { name: "key" },
+      entryObject.key,
+      entryObject,
+      { canEdit: false }
+    );
+    properties.push(keyInfo);
+
+    const valueInfo = setValueOnDebugInfo(
+      { name: "value" },
+      entryObject.value,
+      entryObject,
+      { canEdit: false }
+    );
+    properties.push(valueInfo);
+
+    return { properties };
+  }
+
+  function setValueOnDebugInfo(debugInfo, value, instance, overrides) {
+    try {
+      overrides = overrides || {};
+      debugInfo.canExpand = false;
+      debugInfo.canEdit = false;
       let expandableValue;
 
       if (value instanceof Node) {
@@ -651,6 +799,16 @@ function install(debugValueLookup) {
         debugInfo.type = "array";
         debugInfo.value = `Array[${value.length}]`;
         expandableValue = value;
+      } else if (isMapLike(value)) {
+        debugInfo.canExpand = true;
+        debugInfo.type = "map";
+        debugInfo.value = `Map(${value?.size ?? 0})`;
+        expandableValue = value;
+      } else if (isSetLike(value)) {
+        debugInfo.canExpand = true;
+        debugInfo.type = "set";
+        debugInfo.value = `Set(${value?.size ?? 0})`;
+        expandableValue = value;
       } else {
         debugInfo.type = typeof value;
         debugInfo.value = value;
@@ -662,11 +820,11 @@ function install(debugValueLookup) {
       } else if (value === undefined) {
         debugInfo.type = "undefined";
         debugInfo.value = "undefined";
-      } else if (debugInfo.type === "object") {
+      } else if (debugInfo.type === "object" && expandableValue === undefined) {
         debugInfo.canExpand = true;
         expandableValue = value;
 
-        if (value.constructor) {
+        if (value && value.constructor) {
           debugInfo.value = value.constructor.name;
         } else {
           debugInfo.value = "Object";
@@ -674,18 +832,44 @@ function install(debugValueLookup) {
       }
 
       if (
-        debugInfo.type === "string" ||
-        debugInfo.type === "number" ||
-        debugInfo.type === "boolean"
+        overrides.canEdit === undefined &&
+        (debugInfo.type === "string" ||
+          debugInfo.type === "number" ||
+          debugInfo.type === "boolean")
       ) {
         debugInfo.canEdit = true;
       }
+
+      if (overrides.type) {
+        debugInfo.type = overrides.type;
+      }
+      if (overrides.displayValue !== undefined) {
+        debugInfo.value = overrides.displayValue;
+      }
+      if (overrides.value !== undefined) {
+        debugInfo.value = overrides.value;
+      }
+      if (overrides.canExpand !== undefined) {
+        debugInfo.canExpand = overrides.canExpand;
+      }
+      if (overrides.canEdit !== undefined) {
+        debugInfo.canEdit = overrides.canEdit;
+      }
+      if (overrides.expandableValue !== undefined) {
+        expandableValue = overrides.expandableValue;
+        if (expandableValue !== undefined && overrides.canExpand === undefined) {
+          debugInfo.canExpand = true;
+        }
+      }
+
+      const storedInstance =
+        overrides.instance !== undefined ? overrides.instance : instance;
 
       debugInfo.debugId = debugInfo.debugId || getNextDebugId();
 
       debugValueLookup[debugInfo.debugId] = Object.assign(
         {
-          instance: instance,
+          instance: storedInstance,
           expandableValue: expandableValue,
         },
         debugInfo
