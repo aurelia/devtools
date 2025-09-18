@@ -1,4 +1,4 @@
-import { AureliaInfo, IControllerInfo, Property } from '../shared/types';
+import { AureliaComponentSnapshot, AureliaInfo, IControllerInfo, Property } from '../shared/types';
 import { App } from './../app';
 import { ICustomElementViewModel } from 'aurelia';
 
@@ -16,9 +16,8 @@ export class DebugHost implements ICustomElementViewModel {
     this.consumer = consumer;
     if (chrome && chrome.devtools) {
       chrome.devtools.network.onNavigated.addListener(() => {
-        this.getAllComponents().then((debugObject) => {
-          this.consumer.allAureliaObjects = debugObject || [];
-          this.consumer.buildComponentTree(debugObject || []);
+        this.getAllComponents().then((snapshot) => {
+          this.consumer.handleComponentSnapshot(snapshot || { tree: [], flat: [] });
         });
       });
 
@@ -45,9 +44,8 @@ export class DebugHost implements ICustomElementViewModel {
 
       // Initial load of components - add delay to let Aurelia initialize
       setTimeout(() => {
-        this.getAllComponents().then((debugObject) => {
-          this.consumer.allAureliaObjects = debugObject || [];
-          this.consumer.buildComponentTree(debugObject || []);
+        this.getAllComponents().then((snapshot) => {
+          this.consumer.handleComponentSnapshot(snapshot || { tree: [], flat: [] });
         });
       }, 1000);
     }
@@ -93,32 +91,59 @@ export class DebugHost implements ICustomElementViewModel {
     }
   }
 
-  getAllComponents(): Promise<AureliaInfo[]> {
+  getAllComponents(): Promise<AureliaComponentSnapshot> {
     return new Promise((resolve) => {
       if (chrome && chrome.devtools) {
         const getComponentsCode = `
           (() => {
-            if (window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ && window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.getAllInfo) {
-              try {
-                return window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.getAllInfo();
-              } catch (error) {
-                return [];
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook) {
+              return { kind: 'empty', data: [] };
+            }
+
+            try {
+              if (hook.getComponentTree) {
+                const tree = hook.getComponentTree() || [];
+                return { kind: 'tree', data: tree };
               }
-            } else {
-              return [];
+
+              if (hook.getAllInfo) {
+                const flat = hook.getAllInfo() || [];
+                return { kind: 'flat', data: flat };
+              }
+
+              return { kind: 'empty', data: [] };
+            } catch (error) {
+              return { kind: 'error', data: [] };
             }
           })();
         `;
 
         chrome.devtools.inspectedWindow.eval(
           getComponentsCode,
-          (debugObject: AureliaInfo[]) => {
-            if (!debugObject || debugObject.length === 0) {
+          (result: { kind: string; data: any }) => {
+            if (!result) {
+              resolve({ tree: [], flat: [] });
+              return;
+            }
+
+            if (result.kind === 'tree') {
+              resolve({ tree: Array.isArray(result.data) ? result.data : [], flat: [] });
+              return;
+            }
+
+            if (result.kind === 'flat') {
+              const flatData = Array.isArray(result.data) ? result.data : [];
+              resolve({ tree: [], flat: flatData });
+              return;
+            }
+
+            if (!result.data || result.data.length === 0) {
               setTimeout(() => {
                 chrome.devtools.inspectedWindow.eval(
                   getComponentsCode,
-                  (second: AureliaInfo[]) => {
-                    if (!second || second.length === 0) {
+                  (second: { kind: string; data: any }) => {
+                    if (!second || !Array.isArray(second.data) || second.data.length === 0) {
                       const fallbackScan = `
                         (function(){
                           try {
@@ -139,27 +164,44 @@ export class DebugHost implements ICustomElementViewModel {
                                 }
                               } catch {}
                             }
-                            return results;
-                          } catch { return []; }
+                            return { kind: 'flat', data: results };
+                          } catch { return { kind: 'flat', data: [] }; }
                         })();
                       `;
                       chrome.devtools.inspectedWindow.eval(
                         fallbackScan,
-                        (fallback: AureliaInfo[]) => resolve(fallback || [])
+                        (fallback: { kind: string; data: any }) => {
+                          if (fallback && fallback.kind === 'tree') {
+                            resolve({ tree: Array.isArray(fallback.data) ? fallback.data : [], flat: [] });
+                          } else {
+                            const fallbackFlat = fallback && Array.isArray(fallback.data) ? fallback.data : [];
+                            resolve({ tree: [], flat: fallbackFlat });
+                          }
+                        }
                       );
                     } else {
-                      resolve(second || []);
+                      if (second.kind === 'tree') {
+                        resolve({ tree: Array.isArray(second.data) ? second.data : [], flat: [] });
+                      } else {
+                        const secondFlat = Array.isArray(second.data) ? second.data : [];
+                        resolve({ tree: [], flat: secondFlat });
+                      }
                     }
                   }
                 );
               }, 250);
             } else {
-              resolve(debugObject || []);
+              if (result.kind === 'tree') {
+                resolve({ tree: Array.isArray(result.data) ? result.data : [], flat: [] });
+              } else {
+                const fallbackFlat = Array.isArray(result.data) ? result.data : [];
+                resolve({ tree: [], flat: fallbackFlat });
+              }
             }
           }
         );
       } else {
-        resolve([]);
+        resolve({ tree: [], flat: [] });
       }
     });
   }
@@ -250,6 +292,33 @@ export class DebugHost implements ICustomElementViewModel {
           let isPickerActive = true;
           let currentHighlight = null;
 
+          function getDomPath(element) {
+            if (!element || element.nodeType !== 1) {
+              return '';
+            }
+
+            const segments = [];
+            let current = element;
+
+            while (current && current.nodeType === 1 && current !== document) {
+              const tag = current.tagName ? current.tagName.toLowerCase() : 'unknown';
+              let index = 1;
+              let sibling = current;
+
+              while ((sibling = sibling.previousElementSibling)) {
+                if (sibling.tagName === current.tagName) {
+                  index++;
+                }
+              }
+
+              segments.push(tag + ':nth-of-type(' + index + ')');
+              current = current.parentElement;
+            }
+
+            segments.push('html');
+            return segments.reverse().join(' > ');
+          }
+
           // Add picker styles
           if (!document.getElementById('aurelia-picker-styles')) {
             const style = document.createElement('style');
@@ -322,6 +391,18 @@ export class DebugHost implements ICustomElementViewModel {
               const componentInfo = aureliaHook.getCustomElementInfo(event.target, true);
 
               if (componentInfo) {
+                const domPath = getDomPath(event.target);
+                componentInfo.__auDevtoolsDomPath = domPath;
+                if (componentInfo.customElementInfo) {
+                  componentInfo.customElementInfo.__auDevtoolsDomPath = domPath;
+                }
+                if (componentInfo.customAttributesInfo && componentInfo.customAttributesInfo.length) {
+                  componentInfo.customAttributesInfo.forEach(attr => {
+                    if (attr) {
+                      attr.__auDevtoolsDomPath = domPath;
+                    }
+                  });
+                }
                 // Store the picked component info in a global variable that DevTools can access
                 window.__AURELIA_DEVTOOLS_PICKED_COMPONENT__ = componentInfo;
               } else {

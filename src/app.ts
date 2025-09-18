@@ -4,7 +4,7 @@ import {
   ICustomElementViewModel,
   IPlatform,
 } from 'aurelia';
-import { IControllerInfo, AureliaInfo } from './shared/types';
+import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo } from './shared/types';
 import { resolve } from '@aurelia/kernel';
 
 export class App implements ICustomElementViewModel {
@@ -23,11 +23,14 @@ export class App implements ICustomElementViewModel {
   // Inspector tab data
   selectedElement: IControllerInfo = undefined;
   selectedElementAttributes: IControllerInfo[] = undefined;
+  selectedNodeType: 'custom-element' | 'custom-attribute' = 'custom-element';
 
   // Components tab data
+  componentSnapshot: AureliaComponentSnapshot = { tree: [], flat: [] };
   allAureliaObjects: AureliaInfo[] = undefined;
   componentTree: ComponentNode[] = [];
-  filteredComponentTree: ComponentNode[] = [];
+  viewMode: 'tree' | 'list' = 'tree';
+  selectedBreadcrumb: ComponentNode[] = [];
   selectedComponentId: string = undefined;
   searchQuery: string = '';
   isElementPickerActive: boolean = false;
@@ -53,13 +56,18 @@ export class App implements ICustomElementViewModel {
       document.querySelector('html').style.background = '#202124';
     }
 
-    // Initialize filtered tree
-    this.filteredComponentTree = [];
-
     // Restore persisted preference for following Elements selection
     try {
       const persisted = localStorage.getItem('au-devtools.followChromeSelection');
       if (persisted != null) this.followChromeSelection = persisted === 'true';
+    } catch {}
+
+    // Restore preferred view mode
+    try {
+      const persistedViewMode = localStorage.getItem('au-devtools.viewMode');
+      if (persistedViewMode === 'tree' || persistedViewMode === 'list') {
+        this.viewMode = persistedViewMode;
+      }
     } catch {}
 
     // Check detection state set by devtools.js
@@ -142,12 +150,11 @@ export class App implements ICustomElementViewModel {
       this.plat.queueMicrotask(() => {
         this.debugHost
           .getAllComponents()
-          .then((components) => {
-            this.allAureliaObjects = components || [];
-            this.buildComponentTree(components || []);
+          .then((snapshot) => {
+            this.handleComponentSnapshot(snapshot);
 
-            // Update detection status based on whether we got components
-            if (components && components.length > 0) {
+            const hasData = !!(snapshot?.tree?.length || snapshot?.flat?.length);
+            if (hasData) {
               this.aureliaDetected = true;
               this.detectionState = 'detected';
             }
@@ -156,8 +163,7 @@ export class App implements ICustomElementViewModel {
           })
           .catch((error) => {
             console.warn('Failed to load components:', error);
-            this.allAureliaObjects = [];
-            this.componentTree = [];
+            this.handleComponentSnapshot({ tree: [], flat: [] });
             reject(error);
           });
       });
@@ -175,10 +181,189 @@ export class App implements ICustomElementViewModel {
       });
   }
 
-  public buildComponentTree(components: AureliaInfo[]) {
-    // Build a hierarchical tree of components
-    this.componentTree = this.createComponentHierarchy(components);
-    // Filtering is now handled automatically by the filteredComponentTreeByTab getter
+  public handleComponentSnapshot(snapshot: AureliaComponentSnapshot) {
+    const safeSnapshot = snapshot || { tree: [], flat: [] };
+    this.componentSnapshot = safeSnapshot;
+
+    const rawTree = (safeSnapshot.tree && safeSnapshot.tree.length)
+      ? safeSnapshot.tree
+      : this.convertFlatListToTreeNodes(safeSnapshot.flat || []);
+
+    const fallbackFlat = (safeSnapshot.flat && safeSnapshot.flat.length)
+      ? safeSnapshot.flat
+      : this.flattenRawTree(rawTree);
+
+    this.allAureliaObjects = fallbackFlat;
+    this.componentTree = this.mapRawTreeToComponentNodes(rawTree);
+
+    if (this.selectedComponentId) {
+      const existingNode = this.findComponentById(this.selectedComponentId);
+      if (existingNode) {
+        this.applySelectionFromNode(existingNode);
+      } else {
+        this.selectedComponentId = undefined;
+        this.selectedElement = undefined;
+        this.selectedElementAttributes = undefined;
+        this.selectedBreadcrumb = [];
+        this.selectedNodeType = 'custom-element';
+      }
+    } else {
+      this.selectedBreadcrumb = [];
+      this.selectedNodeType = 'custom-element';
+    }
+  }
+
+  private convertFlatListToTreeNodes(components: AureliaInfo[]): AureliaComponentTreeNode[] {
+    if (!components || !components.length) {
+      return [];
+    }
+
+    const nodes: AureliaComponentTreeNode[] = [];
+    const seenElements = new Set<string>();
+
+    components.forEach((component, index) => {
+      const elementInfo = component?.customElementInfo ?? null;
+      const attrs = this.normalizeAttributes(component?.customAttributesInfo ?? [], elementInfo);
+
+      if (elementInfo) {
+        const elementId = elementInfo.key || elementInfo.name || `flat-${index}`;
+        if (!seenElements.has(elementId)) {
+          nodes.push({
+            id: elementId,
+            domPath: '',
+            tagName: elementInfo.name ?? null,
+            customElementInfo: elementInfo,
+            customAttributesInfo: attrs,
+            children: [],
+          });
+          seenElements.add(elementId);
+        }
+      } else if (attrs.length) {
+        attrs.forEach((attr, attrIndex) => {
+          nodes.push({
+            id: `flat-attr-${index}-${attrIndex}`,
+            domPath: '',
+            tagName: null,
+            customElementInfo: null,
+            customAttributesInfo: [attr],
+            children: [],
+          });
+        });
+      }
+    });
+
+    return nodes;
+  }
+
+  private mapRawTreeToComponentNodes(rawNodes: AureliaComponentTreeNode[]): ComponentNode[] {
+    if (!rawNodes || !rawNodes.length) {
+      return [];
+    }
+
+    const mapped: ComponentNode[] = [];
+    for (const rawNode of rawNodes) {
+      mapped.push(...this.transformRawNode(rawNode, 'root'));
+    }
+    return this.sortComponentNodes(mapped);
+  }
+
+  private transformRawNode(rawNode: AureliaComponentTreeNode, parentId: string): ComponentNode[] {
+    if (!rawNode) return [];
+
+    const elementInfo = rawNode.customElementInfo ?? null;
+    const normalizedAttributes = this.normalizeAttributes(rawNode.customAttributesInfo || [], elementInfo);
+    const rawChildren = rawNode.children || [];
+
+    if (elementInfo) {
+      const baseId = rawNode.id || `${parentId}-${Math.random().toString(36).slice(2)}`;
+      const elementName = elementInfo.name || rawNode.tagName || 'unknown-element';
+
+      const elementNode: ComponentNode = {
+        id: baseId,
+        name: elementName,
+        type: 'custom-element',
+        domPath: rawNode.domPath || '',
+        tagName: rawNode.tagName || null,
+        children: [],
+        data: {
+          kind: 'element',
+          raw: rawNode,
+          info: {
+            customElementInfo: elementInfo,
+            customAttributesInfo: normalizedAttributes,
+          },
+        },
+        expanded: false,
+        hasAttributes: normalizedAttributes.length > 0,
+      };
+
+      const attributeChildren = normalizedAttributes.map((attr, index) => this.createAttributeNode(baseId, rawNode, attr, index));
+      elementNode.children.push(...attributeChildren);
+
+      for (const child of rawChildren) {
+        elementNode.children.push(...this.transformRawNode(child, baseId));
+      }
+
+      elementNode.children = this.sortComponentNodes(elementNode.children);
+      elementNode.hasAttributes = elementNode.children.some(child => child.type === 'custom-attribute');
+
+      return [elementNode];
+    }
+
+    const nodes: ComponentNode[] = [];
+    normalizedAttributes.forEach((attr, index) => {
+      nodes.push(this.createAttributeNode(parentId, rawNode, attr, index));
+    });
+
+    for (const child of rawChildren) {
+      nodes.push(...this.transformRawNode(child, parentId));
+    }
+
+    return nodes;
+  }
+
+  private createAttributeNode(parentId: string, owner: AureliaComponentTreeNode, attr: IControllerInfo, index: number): ComponentNode {
+    const attrName = attr?.name || 'custom-attribute';
+    return {
+      id: `${parentId}::attr-${index}`,
+      name: attrName,
+      type: 'custom-attribute',
+      domPath: owner?.domPath || '',
+      tagName: owner?.tagName || null,
+      children: [],
+      data: {
+        kind: 'attribute',
+        raw: attr,
+        owner,
+        info: {
+          customElementInfo: null,
+          customAttributesInfo: attr ? [attr] : [],
+        },
+      },
+      expanded: false,
+      hasAttributes: false,
+    };
+  }
+
+  private flattenRawTree(rawNodes: AureliaComponentTreeNode[]): AureliaInfo[] {
+    const collected: AureliaInfo[] = [];
+
+    const walk = (nodes: AureliaComponentTreeNode[]) => {
+      for (const node of nodes) {
+        if (node.customElementInfo || (node.customAttributesInfo && node.customAttributesInfo.length)) {
+          collected.push({
+            customElementInfo: node.customElementInfo,
+            customAttributesInfo: node.customAttributesInfo || [],
+          });
+        }
+        if (node.children && node.children.length) {
+          walk(node.children);
+        }
+      }
+    };
+
+    walk(rawNodes || []);
+    return collected;
   }
 
   get filteredComponentTreeByTab(): ComponentNode[] {
@@ -205,6 +390,91 @@ export class App implements ICustomElementViewModel {
 
     const query = this.searchQuery.toLowerCase();
     return this.filterComponentTree(tabFilteredTree, query);
+  }
+
+  get visibleComponentNodes(): ComponentDisplayNode[] {
+    const roots = this.filteredComponentTreeByTab;
+    if (!roots || !roots.length) {
+      return [];
+    }
+
+    const searchActive = !!this.searchQuery.trim();
+    const items: ComponentDisplayNode[] = [];
+
+    const traverse = (nodes: ComponentNode[], depth: number) => {
+      for (const node of nodes) {
+        items.push({ node, depth });
+
+        const hasChildren = node.children && node.children.length > 0;
+        if (!hasChildren) continue;
+
+        const shouldShowChildren = this.viewMode === 'list' || node.expanded || searchActive;
+        if (shouldShowChildren) {
+          traverse(node.children, depth + 1);
+        }
+      }
+    };
+
+    traverse(roots, 0);
+    return items;
+  }
+
+  get breadcrumbSegments(): BreadcrumbSegment[] {
+    if (!this.selectedBreadcrumb || !this.selectedBreadcrumb.length) {
+      return [];
+    }
+
+    return this.selectedBreadcrumb.map((node) => ({
+      id: node.id,
+      label: node.type === 'custom-element' ? `<${node.name}>` : `@${node.name}`,
+      type: node.type,
+    }));
+  }
+
+  get totalComponentNodeCount(): number {
+    const countNodes = (nodes: ComponentNode[]): number => {
+      return nodes.reduce((total, node) => total + 1 + countNodes(node.children || []), 0);
+    };
+
+    return countNodes(this.componentTree || []);
+  }
+
+  private normalizeAttributes(attrs: IControllerInfo[], elementInfo: IControllerInfo | null | undefined): IControllerInfo[] {
+    if (!attrs || !attrs.length) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+
+    return attrs.filter((attr) => {
+      if (!attr) return false;
+      const key = (attr.key || attr.name || '').toString().toLowerCase();
+      const sameAsElement = !!(elementInfo && ((attr.key && elementInfo.key && attr.key === elementInfo.key) || (attr.name && elementInfo.name && attr.name === elementInfo.name)));
+      if (sameAsElement) return false;
+      if (key && seen.has(key)) return false;
+      if (key) {
+        seen.add(key);
+      }
+      return true;
+    });
+  }
+
+  private sortComponentNodes(nodes: ComponentNode[]): ComponentNode[] {
+    if (!nodes || !nodes.length) return [];
+
+    const cloned = nodes.map((node) => ({
+      ...node,
+      children: this.sortComponentNodes(node.children || []),
+    }));
+
+    cloned.sort((a, b) => {
+      if (a.type === b.type) {
+        return a.name.localeCompare(b.name);
+      }
+      return a.type === 'custom-element' ? -1 : 1;
+    });
+
+    return cloned;
   }
 
   private filterTreeByType(nodes: ComponentNode[], type: 'custom-element' | 'custom-attribute'): ComponentNode[] {
@@ -234,123 +504,73 @@ export class App implements ICustomElementViewModel {
     return filtered;
   }
 
-  createComponentHierarchy(components: AureliaInfo[]): ComponentNode[] {
-    const tree: ComponentNode[] = [];
-    const processedElements = new Set<string>();
-
-    components.forEach((component, index) => {
-      // Process Custom Elements
-      if (component.customElementInfo) {
-        const elementInfo = component.customElementInfo;
-        const elementId = elementInfo.key || `element-${index}`;
-
-        if (!processedElements.has(elementId)) {
-          const elementNode: ComponentNode = {
-            id: elementId,
-            name: elementInfo.name || `<unknown-element>`,
-            type: 'custom-element',
-            children: [],
-            data: component,
-            expanded: false,
-            hasAttributes: component.customAttributesInfo?.length > 0,
-          };
-
-          // Add custom attributes as children if they exist
-          if (
-            component.customAttributesInfo &&
-            component.customAttributesInfo.length > 0
-          ) {
-            // Filter out any attribute that accidentally matches the element's key/name
-            const filteredAttrs = component.customAttributesInfo.filter(attr => {
-              try {
-                if (!attr) return false;
-                const sameKey = !!(attr.key && elementInfo.key && attr.key === elementInfo.key);
-                const sameName = !!(attr.name && elementInfo.name && attr.name === elementInfo.name);
-                return !(sameKey || sameName);
-              } catch { return true; }
-            });
-
-            filteredAttrs.forEach((attr, attrIndex) => {
-              const attrNode: ComponentNode = {
-                id: `${elementId}-attr-${attrIndex}`,
-                name: attr.name || `unknown-attribute`,
-                type: 'custom-attribute',
-                children: [],
-                data: { customElementInfo: null, customAttributesInfo: [attr] },
-                expanded: false,
-                hasAttributes: false,
-              };
-              elementNode.children.push(attrNode);
-            });
-          }
-
-          tree.push(elementNode);
-          processedElements.add(elementId);
-        }
-      } else if (
-        component.customAttributesInfo &&
-        component.customAttributesInfo.length > 0
-      ) {
-        // Process standalone Custom Attributes (without a parent element)
-        component.customAttributesInfo
-          .filter(attr => !!attr)
-          .forEach((attr, attrIndex) => {
-          const standaloneAttrNode: ComponentNode = {
-            id: `standalone-attr-${index}-${attrIndex}`,
-            name: attr.name || `unknown-attribute`,
-            type: 'custom-attribute',
-            children: [],
-            data: { customElementInfo: null, customAttributesInfo: [attr] },
-            expanded: false,
-            hasAttributes: false,
-          };
-          tree.push(standaloneAttrNode);
-        });
-      }
-    });
-
-    return tree.sort((a, b) => {
-      // Sort custom elements first, then attributes
-      if (a.type === 'custom-element' && b.type === 'custom-attribute')
-        return -1;
-      if (a.type === 'custom-attribute' && b.type === 'custom-element')
-        return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }
-
   selectComponent(componentId: string) {
-    this.selectedComponentId = componentId;
     const component = this.findComponentById(componentId);
     if (component) {
-      // Handle custom attributes differently from custom elements
-      if (component.type === 'custom-attribute') {
-        // For custom attributes, show the attribute info as the selected element
-        // and clear any additional attributes since this IS the attribute
-        this.selectedElement = component.data.customAttributesInfo?.[0] || null;
-        this.selectedElement.bindables = this.selectedElement?.bindables || [];
-        this.selectedElement.properties = this.selectedElement?.properties || [];
-        this.selectedElementAttributes = [];
-      } else {
-        // For custom elements, use the existing logic
-        this.selectedElement = component.data.customElementInfo || null;
-        this.selectedElement.bindables = this.selectedElement?.bindables || [];
-        this.selectedElement.properties = this.selectedElement?.properties || [];
-        // Apply the same filtering logic used in tree creation to prevent duplicates
-        const elementInfo = component.data.customElementInfo;
-        const rawAttributes = component.data.customAttributesInfo || [];
-        this.selectedElementAttributes = (rawAttributes || []).filter(attr => {
-          try {
-            if (!attr) return false;
-            const sameKey = !!(attr.key && elementInfo.key && attr.key === elementInfo.key);
-            const sameName = !!(attr.name && elementInfo.name && attr.name === elementInfo.name);
-            return !(sameKey || sameName);
-          } catch { return true; }
-        });
-      }
-
-      // No longer switch tabs - details will show in the right panel
+      this.applySelectionFromNode(component);
     }
+  }
+
+  private applySelectionFromNode(node: ComponentNode) {
+    this.selectedComponentId = node.id;
+    this.selectedNodeType = node.type;
+
+    if (node.data.kind === 'attribute') {
+      const attributeInfo = node.data.raw;
+      this.selectedElement = attributeInfo || null;
+      this.selectedElement.bindables = this.selectedElement?.bindables || [];
+      this.selectedElement.properties = this.selectedElement?.properties || [];
+      this.selectedElementAttributes = [];
+    } else {
+      const elementInfo = node.data.info.customElementInfo;
+      const attributeInfos = node.data.info.customAttributesInfo || [];
+      this.selectedElement = elementInfo || null;
+      this.selectedElement.bindables = this.selectedElement?.bindables || [];
+      this.selectedElement.properties = this.selectedElement?.properties || [];
+      this.selectedElementAttributes = attributeInfos.filter((attr) => {
+        try {
+          if (!attr) return false;
+          const sameKey = !!(attr.key && elementInfo?.key && attr.key === elementInfo.key);
+          const sameName = !!(attr.name && elementInfo?.name && attr.name === elementInfo.name);
+          return !(sameKey || sameName);
+        } catch {
+          return true;
+        }
+      });
+    }
+
+    const path = this.findNodePathById(node.id);
+    if (path && path.length) {
+      this.selectedBreadcrumb = [...path];
+      path.forEach((ancestor) => {
+        if (ancestor.data.kind === 'element') {
+          ancestor.expanded = true;
+        }
+      });
+    } else {
+      this.selectedBreadcrumb = [node];
+    }
+  }
+
+  private findNodePathById(nodeId: string): ComponentNode[] | null {
+    const path: ComponentNode[] = [];
+
+    const traverse = (nodes: ComponentNode[]): boolean => {
+      for (const node of nodes) {
+        path.push(node);
+        if (node.id === nodeId) {
+          return true;
+        }
+        if (node.children && node.children.length && traverse(node.children)) {
+          return true;
+        }
+        path.pop();
+      }
+      return false;
+    };
+
+    const found = traverse(this.componentTree || []);
+    return found ? [...path] : null;
   }
 
   findComponentById(id: string): ComponentNode | undefined {
@@ -365,11 +585,39 @@ export class App implements ICustomElementViewModel {
     return findInTree(this.componentTree);
   }
 
+  handleExpandToggle(node: ComponentNode, event?: Event) {
+    event?.stopPropagation();
+    if (!node?.id) {
+      return;
+    }
+    this.toggleComponentExpansion(node.id);
+  }
+
   toggleComponentExpansion(componentId: string) {
     const component = this.findComponentById(componentId);
     if (component) {
       component.expanded = !component.expanded;
     }
+  }
+
+  handlePropertyRowClick(property: any, event?: Event) {
+    if (!property?.canExpand || property?.isEditing) {
+      return;
+    }
+
+    const target = event?.target as HTMLElement | null;
+    if (!target) return;
+
+    if (target.closest('.property-value-wrapper') || target.closest('.property-editor')) {
+      return;
+    }
+
+    if (target.closest('.expand-button')) {
+      return;
+    }
+
+    event?.stopPropagation();
+    this.togglePropertyExpansion(property);
   }
 
   // Search and filter functionality
@@ -415,10 +663,11 @@ export class App implements ICustomElementViewModel {
   // Component highlighting methods
   highlightComponent(component: ComponentNode) {
     // Pass the component info to debugHost for highlighting
+    const info = component.data.info;
     this.debugHost.highlightComponent({
       name: component.name,
       type: component.type,
-      ...component.data,
+      ...info,
     });
   }
 
@@ -445,18 +694,14 @@ export class App implements ICustomElementViewModel {
     // Find the component in our tree and select it
     const foundComponent = this.findComponentInTreeByInfo(componentInfo);
     if (foundComponent) {
-      this.selectedComponentId = foundComponent.id;
-      this.selectedElement = foundComponent.data.customElementInfo || (foundComponent.data.customAttributesInfo?.[0] ?? null);
-      this.selectedElementAttributes = foundComponent.data.customAttributesInfo || [];
+      this.applySelectionFromNode(foundComponent);
     } else {
       // If not found, refresh components and try again
       this.loadAllComponents().then(() => {
         const foundComponentAfterRefresh =
           this.findComponentInTreeByInfo(componentInfo);
         if (foundComponentAfterRefresh) {
-          this.selectedComponentId = foundComponentAfterRefresh.id;
-          this.selectedElement = foundComponentAfterRefresh.data.customElementInfo || (foundComponentAfterRefresh.data.customAttributesInfo?.[0] ?? null);
-          this.selectedElementAttributes = foundComponentAfterRefresh.data.customAttributesInfo || [];
+          this.applySelectionFromNode(foundComponentAfterRefresh);
         }
       });
     }
@@ -469,10 +714,25 @@ export class App implements ICustomElementViewModel {
     } catch {}
   }
 
+  toggleViewMode() {
+    const nextMode = this.viewMode === 'tree' ? 'list' : 'tree';
+    this.setViewMode(nextMode);
+  }
+
+  setViewMode(mode: 'tree' | 'list') {
+    if (this.viewMode === mode) {
+      return;
+    }
+    this.viewMode = mode;
+    try {
+      localStorage.setItem('au-devtools.viewMode', mode);
+    } catch {}
+  }
+
   revealInElements() {
     const node = this.findComponentById(this.selectedComponentId);
     if (!node) return;
-    const info = node.data;
+    const info = node.data.info;
     this.debugHost.revealInElements({
       name: node.name,
       type: node.type,
@@ -483,28 +743,151 @@ export class App implements ICustomElementViewModel {
   private findComponentInTreeByInfo(
     componentInfo: AureliaInfo
   ): ComponentNode | undefined {
-    const searchInNodes = (
-      nodes: ComponentNode[]
-    ): ComponentNode | undefined => {
+    if (!componentInfo) return undefined;
+
+    const targetElement = componentInfo.customElementInfo || null;
+    const targetAttributes = componentInfo.customAttributesInfo || [];
+    const domPath = (componentInfo as any)?.__auDevtoolsDomPath as string | undefined;
+
+    if (domPath) {
+      const byPath = this.findNodeByDomPath(domPath, targetElement, targetAttributes);
+      if (byPath) {
+        return byPath;
+      }
+    }
+
+    return this.searchNodesForMatch(this.componentTree, targetElement, targetAttributes);
+  }
+
+  private findNodeByDomPath(
+    domPath: string,
+    targetElement: IControllerInfo | null,
+    targetAttributes: IControllerInfo[]
+  ): ComponentNode | undefined {
+    if (!domPath) return undefined;
+
+    let attributeMatch: ComponentNode | undefined;
+    let elementMatch: ComponentNode | undefined;
+
+    const visit = (nodes: ComponentNode[]) => {
       for (const node of nodes) {
-        // Check if this node matches the component info
-        if (
-          componentInfo.customElementInfo &&
-          node.data.customElementInfo &&
-          node.data.customElementInfo.key ===
-            componentInfo.customElementInfo.key
-        ) {
-          return node;
+        if (node.domPath === domPath) {
+          if (node.data.kind === 'attribute' && targetAttributes.length && this.nodeMatchesAttribute(node, targetAttributes)) {
+            attributeMatch = attributeMatch || node;
+          }
+          if (node.data.kind === 'element' && this.nodeMatchesElement(node, targetElement)) {
+            elementMatch = elementMatch || node;
+          }
         }
 
-        // Check in children
-        const found = searchInNodes(node.children);
-        if (found) return found;
+        if (node.children?.length) {
+          visit(node.children);
+        }
       }
-      return undefined;
     };
 
-    return searchInNodes(this.componentTree);
+    visit(this.componentTree || []);
+
+    if (targetElement && elementMatch) {
+      return elementMatch;
+    }
+
+    if (!targetElement && targetAttributes.length) {
+      return attributeMatch || elementMatch;
+    }
+
+    return elementMatch || attributeMatch;
+  }
+
+  private searchNodesForMatch(
+    nodes: ComponentNode[],
+    targetElement: IControllerInfo | null,
+    targetAttributes: IControllerInfo[]
+  ): ComponentNode | undefined {
+    for (const node of nodes) {
+      if (this.nodeMatchesTarget(node, targetElement, targetAttributes)) {
+        return node;
+      }
+
+      const foundInChildren = this.searchNodesForMatch(node.children || [], targetElement, targetAttributes);
+      if (foundInChildren) {
+        return foundInChildren;
+      }
+    }
+
+    return undefined;
+  }
+
+  private nodeMatchesTarget(
+    node: ComponentNode,
+    targetElement: IControllerInfo | null,
+    targetAttributes: IControllerInfo[]
+  ): boolean {
+    if (node.data.kind === 'element') {
+      if (targetElement && this.nodeMatchesElement(node, targetElement)) {
+        return true;
+      }
+
+      if (!targetElement && targetAttributes.length) {
+        return this.nodeContainsAnyAttribute(node.data.info.customAttributesInfo || [], targetAttributes);
+      }
+    }
+
+    if (node.data.kind === 'attribute') {
+      const attrInfo = node.data.raw;
+      return targetAttributes.some((candidate) => this.isSameControllerInfo(attrInfo, candidate));
+    }
+
+    return false;
+  }
+
+  private nodeMatchesElement(node: ComponentNode, targetElement: IControllerInfo | null): boolean {
+    if (!targetElement || node.data.kind !== 'element') {
+      return false;
+    }
+
+    const nodeElement = node.data.info.customElementInfo;
+    return this.isSameControllerInfo(nodeElement, targetElement);
+  }
+
+  private nodeMatchesAttribute(node: ComponentNode, targetAttributes: IControllerInfo[]): boolean {
+    if (node.data.kind !== 'attribute' || !targetAttributes?.length) {
+      return false;
+    }
+
+    const attributeInfo = node.data.raw as IControllerInfo;
+    return targetAttributes.some((candidate) => this.isSameControllerInfo(attributeInfo, candidate));
+  }
+
+  private nodeContainsAnyAttribute(
+    nodeAttributes: IControllerInfo[],
+    targetAttributes: IControllerInfo[]
+  ): boolean {
+    if (!nodeAttributes?.length || !targetAttributes?.length) {
+      return false;
+    }
+
+    return targetAttributes.some((candidate) =>
+      nodeAttributes.some((existing) => this.isSameControllerInfo(existing, candidate))
+    );
+  }
+
+  private isSameControllerInfo(a: IControllerInfo | null | undefined, b: IControllerInfo | null | undefined): boolean {
+    if (!a || !b) return false;
+
+    if (a.key && b.key && a.key === b.key) {
+      return true;
+    }
+
+    if (a.name && b.name && a.name === b.name) {
+      return true;
+    }
+
+    const aAliases = Array.isArray(a.aliases) ? a.aliases : [];
+    const bAliases = Array.isArray(b.aliases) ? b.aliases : [];
+
+    return aAliases.some((alias: any) => alias && (alias === b.name || bAliases.includes(alias)))
+      || bAliases.some((alias: any) => alias && alias === a.name);
   }
 
   valueChanged(element: IControllerInfo) {
@@ -733,14 +1116,40 @@ export class App implements ICustomElementViewModel {
   }
 }
 
+interface BreadcrumbSegment {
+  id: string;
+  label: string;
+  type: 'custom-element' | 'custom-attribute';
+}
+
 interface ComponentNode {
   id: string;
   name: string;
   type: 'custom-element' | 'custom-attribute';
+  domPath: string;
+  tagName: string | null;
   children: ComponentNode[];
-  data: AureliaInfo;
+  data: ComponentNodeData;
   expanded: boolean;
   hasAttributes: boolean;
+}
+
+type ComponentNodeData =
+  | {
+      kind: 'element';
+      raw: AureliaComponentTreeNode;
+      info: AureliaInfo;
+    }
+  | {
+      kind: 'attribute';
+      raw: IControllerInfo;
+      owner: AureliaComponentTreeNode;
+      info: AureliaInfo;
+    };
+
+interface ComponentDisplayNode {
+  node: ComponentNode;
+  depth: number;
 }
 
 export class StringifyValueConverter implements ValueConverterInstance {

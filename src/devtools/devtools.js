@@ -34,34 +34,48 @@ function createElementsSidebar() {
 
   chrome.devtools.panels.elements.createSidebarPane('Aurelia', function(pane) {
     elementsSidebarPane = pane;
+    let pageSet = false;
+    try {
+      pane.setPage('index.html');
+      pageSet = true;
+    } catch (error) {
+      pageSet = false;
+    }
 
-    const updateSidebar = () => {
-      if (!elementsSidebarPane) return;
-      const expr = `(() => {
-        try {
-          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
-          if (!hook || !hook.getCustomElementInfo) {
-            return { status: 'no-hook', message: 'Aurelia DevTools hook not available' };
-          }
-          const info = hook.getCustomElementInfo($0, true);
-          if (!info || (!info.customElementInfo && (!info.customAttributesInfo || !info.customAttributesInfo.length))) {
-            return { status: 'no-selection', message: 'Selected node is not an Aurelia component/attribute' };
-          }
-          return { status: 'ok', ...info };
-        } catch (e) { return { status: 'error', message: String(e && e.message || e) }; }
-      })()`;
+    // Ensure hooks are installed when sidebar opens
+    chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
+
+    if (pageSet) {
       try {
-        elementsSidebarPane.setExpression(expr, 'Aurelia');
-      } catch (e) {
-        // Fallback to setObject with a small message
-        elementsSidebarPane.setObject({ message: 'Unable to evaluate Aurelia info' }, 'Aurelia');
-      }
-    };
+        pane.onShown.addListener(() => chrome.devtools.inspectedWindow.eval(hooksAsStringv2));
+      } catch {}
+    } else {
+      const updateSidebar = () => {
+        if (!elementsSidebarPane) return;
+        const expr = `(() => {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || !hook.getCustomElementInfo) {
+              return { status: 'no-hook', message: 'Aurelia DevTools hook not available' };
+            }
+            const info = hook.getCustomElementInfo($0, true);
+            if (!info || (!info.customElementInfo && (!info.customAttributesInfo || !info.customAttributesInfo.length))) {
+              return { status: 'no-selection', message: 'Selected node is not an Aurelia component/attribute' };
+            }
+            return { status: 'ok', ...info };
+          } catch (e) { return { status: 'error', message: String(e && e.message || e) }; }
+        })()`;
+        try {
+          elementsSidebarPane.setExpression(expr, 'Aurelia');
+        } catch (e) {
+          elementsSidebarPane.setObject({ message: 'Unable to evaluate Aurelia info' }, 'Aurelia');
+        }
+      };
 
-    // Keep sidebar in sync with $0
-    try { pane.onShown.addListener(updateSidebar); } catch {}
-    chrome.devtools.panels.elements.onSelectionChanged.addListener(updateSidebar);
-    updateSidebar();
+      try { pane.onShown.addListener(updateSidebar); } catch {}
+      chrome.devtools.panels.elements.onSelectionChanged.addListener(updateSidebar);
+      updateSidebar();
+    }
   });
 }
 
@@ -175,6 +189,55 @@ function install(debugValueLookup) {
         hooks.getCustomElementInfo(root, false),
         ...Array.from(root.children).flatMap((y) => hooks.getAllInfo(y)),
       ].filter((x) => x);
+    },
+    getComponentTree: () => {
+      try {
+        const elementToNode = new Map();
+        const roots = [];
+        const elements = Array.from(document.querySelectorAll('*'));
+
+        for (const element of elements) {
+          const info = hooks.getCustomElementInfo(element, false);
+          if (!info) continue;
+
+          const hasElement = !!(info.customElementInfo && info.customElementInfo.name);
+          const hasAttributes = !!(info.customAttributesInfo && info.customAttributesInfo.length);
+
+          if (!hasElement && !hasAttributes) continue;
+
+          const domPath = getDomPath(element);
+          const nodeId = createNodeId(info, domPath);
+
+          elementToNode.set(element, {
+            id: nodeId,
+            domPath,
+            tagName: element.tagName ? element.tagName.toLowerCase() : null,
+            customElementInfo: info.customElementInfo,
+            customAttributesInfo: info.customAttributesInfo || [],
+            children: [],
+          });
+        }
+
+        for (const element of elements) {
+          const node = elementToNode.get(element);
+          if (!node) continue;
+
+          let parent = element.parentElement;
+          while (parent && !elementToNode.has(parent)) {
+            parent = parent.parentElement;
+          }
+
+          if (parent && elementToNode.has(parent)) {
+            elementToNode.get(parent).children.push(node);
+          } else {
+            roots.push(node);
+          }
+        }
+
+        return roots;
+      } catch (error) {
+        return [];
+      }
     },
     updateValues: (info, property) => {
       if (property && property.debugId && debugValueLookup[property.debugId]) {
@@ -400,6 +463,39 @@ function install(debugValueLookup) {
       return null;
     },
   };
+
+  function getDomPath(element) {
+    if (!element || element.nodeType !== 1) {
+      return '';
+    }
+
+    const segments = [];
+    let current = element;
+
+    while (current && current.nodeType === 1 && current !== document) {
+      const tag = current.tagName ? current.tagName.toLowerCase() : 'unknown';
+      let index = 1;
+      let sibling = current;
+
+      while ((sibling = sibling.previousElementSibling)) {
+        if (sibling.tagName === current.tagName) {
+          index++;
+        }
+      }
+
+      segments.push(`${tag}:nth-of-type(${index})`);
+      current = current.parentElement;
+    }
+
+    segments.push('html');
+    return segments.reverse().join(' > ');
+  }
+
+  function createNodeId(info, domPath) {
+    const elementKey = info && info.customElementInfo ? (info.customElementInfo.key || info.customElementInfo.name || '') : '';
+    const attrKeys = (info && info.customAttributesInfo ? info.customAttributesInfo.map((attr) => attr && (attr.key || attr.name || '')).join('|') : '');
+    return `${domPath}::${elementKey}::${attrKeys}`;
+  }
 
   return { hooks, debugValueLookup };
 

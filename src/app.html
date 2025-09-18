@@ -70,12 +70,32 @@
                   <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 13.65-6.65z" />
                 </svg>
               </button>
+              <div class="view-mode-toggle" role="group" aria-label="Component view mode">
+                <button
+                  class="toolbar-button icon-only ${viewMode === 'tree' ? 'active' : ''}"
+                  click.trigger="setViewMode('tree')"
+                  title="Tree view"
+                  aria-label="Tree view"
+                  aria-pressed="${viewMode === 'tree'}"
+                >
+                  <span class="view-mode-icon">🌳</span>
+                </button>
+                <button
+                  class="toolbar-button icon-only ${viewMode === 'list' ? 'active' : ''}"
+                  click.trigger="setViewMode('list')"
+                  title="List view"
+                  aria-label="List view"
+                  aria-pressed="${viewMode === 'list'}"
+                >
+                  <span class="view-mode-icon">☰</span>
+                </button>
+              </div>
               <span
                 class="component-count"
-                if.bind="filteredComponentTreeByTab.length"
+                if.bind="visibleComponentNodes.length"
               >
-                ${filteredComponentTreeByTab.length}${searchQuery ? ' of ' +
-                componentTree.length : ''} ${activeTab === 'all' ? 'component' : activeTab.slice(0, -1)}${filteredComponentTreeByTab.length
+                ${visibleComponentNodes.length}${searchQuery ? ' of ' +
+                totalComponentNodeCount : ''} ${activeTab === 'all' ? 'component' : activeTab.slice(0, -1)}${visibleComponentNodes.length
                 !== 1 ? 's' : ''}
               </span>
             </div>
@@ -158,7 +178,7 @@
             </div>
 
             <div
-              if.bind="aureliaDetected && componentTree.length && !filteredComponentTreeByTab.length && searchQuery"
+              if.bind="aureliaDetected && componentTree.length && !visibleComponentNodes.length && searchQuery"
               class="empty-components"
             >
               <div class="empty-icon">🔍</div>
@@ -172,32 +192,35 @@
               </button>
             </div>
 
-            <div class="component-tree" if.bind="aureliaDetected && filteredComponentTreeByTab.length">
+            <div class="component-tree" if.bind="aureliaDetected && visibleComponentNodes.length">
               <div
-                repeat.for="component of filteredComponentTreeByTab"
-                class="component-tree-item"
+                repeat.for="item of visibleComponentNodes"
+                class="component-tree-row"
               >
                 <div
-                  class="component-item ${selectedComponentId === component.id ? 'selected' : ''}"
-                  click.trigger="selectComponent(component.id)"
-                  mouseenter.trigger="highlightComponent(component)"
+                  class="component-item ${selectedComponentId === item.node.id ? 'selected' : ''}"
+                  style="padding-left: ${(viewMode === 'list' ? 0 : item.depth * 18)}px"
+                  title="${item.node.domPath || item.node.name}"
+                  click.trigger="selectComponent(item.node.id)"
+                  mouseenter.trigger="highlightComponent(item.node)"
                   mouseleave.trigger="unhighlightComponent()"
                 >
                   <button
                     class="expand-toggle"
-                    css="visibility: ${component.children.length ? 'visible' : 'hidden'}"
-                    click.trigger="toggleComponentExpansion(component.id)"
+                    css="visibility: ${(item.node.children.length && viewMode === 'tree') ? 'visible' : 'hidden'}"
+                    disabled.bind="viewMode === 'list'"
+                    click.trigger="handleExpandToggle(item.node, $event)"
                   >
                     <svg
                       width="8"
                       height="8"
                       viewBox="0 0 8 8"
-                      class="expand-icon ${component.expanded ? 'expanded' : ''}"
+                      class="expand-icon ${item.node.expanded ? 'expanded' : ''}"
                     >
                       <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
                     </svg>
                   </button>
-                  <span class="component-icon ${component.type}">
+                  <span class="component-icon ${item.node.type}">
                     <svg
                       width="12"
                       height="12"
@@ -205,64 +228,24 @@
                       fill="currentColor"
                     >
                       <path
-                        if.bind="component.type === 'custom-element'"
+                        if.bind="item.node.type === 'custom-element'"
                         d="M2 2h8v2H2V2zm0 3h8v5H2V5z"
                       />
                       <path
-                        if.bind="component.type === 'custom-attribute'"
+                        if.bind="item.node.type === 'custom-attribute'"
                         d="M6 1L1 6l5 5 5-5-5-5z"
                       />
                     </svg>
                   </span>
-                  <span class="component-name ${component.type}"
-                    >&lt;${component.name}&gt;</span
-                  >
+                  <span class="component-name ${item.node.type}">
+                    <span if.bind="item.node.type === 'custom-element'">&lt;${item.node.name}&gt;</span>
+                    <span if.bind="item.node.type === 'custom-attribute'">@${item.node.name}</span>
+                  </span>
                   <span
-                    if.bind="component.hasAttributes"
+                    if.bind="item.node.data.kind === 'element' && item.node.data.info.customAttributesInfo.length"
                     class="component-badge"
-                    >${component.children.length}</span
+                    >${item.node.data.info.customAttributesInfo.length}</span
                   >
-                </div>
-
-                <div
-                  if.bind="component.expanded && component.children.length"
-                  class="component-children"
-                >
-                  <div
-                    repeat.for="child of component.children"
-                    class="component-tree-item"
-                  >
-                    <div
-                      class="component-item ${selectedComponentId === child.id ? 'selected' : ''}"
-                      click.trigger="selectComponent(child.id)"
-                      mouseenter.trigger="highlightComponent(child)"
-                      mouseleave.trigger="unhighlightComponent()"
-                    >
-                      <button class="expand-toggle" style="visibility: hidden">
-                        <!-- No expand button for leaf nodes -->
-                      </button>
-                      <span class="component-icon ${child.type}">
-                        <svg
-                          width="12"
-                          height="12"
-                          viewBox="0 0 12 12"
-                          fill="currentColor"
-                        >
-                          <path
-                            if.bind="child.type === 'custom-element'"
-                            d="M2 2h8v2H2V2zm0 3h8v5H2V5z"
-                          />
-                          <path
-                            if.bind="child.type === 'custom-attribute'"
-                            d="M6 1L1 6l5 5 5-5-5-5z"
-                          />
-                        </svg>
-                      </span>
-                      <span class="component-name ${child.type}"
-                        >${child.name}</span
-                      >
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -299,10 +282,21 @@
             if.bind="selectedComponentId && selectedElement"
             class="component-details"
           >
+            <nav class="component-breadcrumbs" if.bind="breadcrumbSegments.length">
+              <template repeat.for="crumb of breadcrumbSegments; index as i">
+                <button
+                  class="breadcrumb-item ${crumb.type} ${crumb.id === selectedComponentId ? 'active' : ''}"
+                  click.trigger="selectComponent(crumb.id)"
+                >
+                  ${crumb.label}
+                </button>
+                <span class="breadcrumb-separator" if.bind="i < breadcrumbSegments.length - 1">›</span>
+              </template>
+            </nav>
             <div class="details-header">
               <div class="selected-component-info">
                 <span
-                  class="component-icon ${selectedElement ? 'custom-element' : 'custom-attribute'}"
+                  class="component-icon ${selectedNodeType}"
                 >
                   <svg
                     width="16"
@@ -311,18 +305,22 @@
                     fill="currentColor"
                   >
                     <path
-                      if.bind="selectedElement"
+                      if.bind="selectedNodeType === 'custom-element'"
                       d="M2 2h8v2H2V2zm0 3h8v5H2V5z"
                     />
                     <path
-                      if.bind="!selectedElement"
+                      if.bind="selectedNodeType === 'custom-attribute'"
                       d="M6 1L1 6l5 5 5-5-5-5z"
                     />
                   </svg>
                 </span>
                 <span class="selected-component-name">
-                  ${selectedElement ? '<' + selectedElement.name + '>' : 'Custom
-                  Attribute'}
+                  <span if.bind="selectedNodeType === 'custom-element'">
+                    &lt;${selectedElement ? selectedElement.name : 'component'}&gt;
+                  </span>
+                  <span if.bind="selectedNodeType === 'custom-attribute'">
+                    @${selectedElement ? selectedElement.name : 'attribute'}
+                  </span>
                 </span>
               </div>
             </div>
@@ -359,7 +357,10 @@
                       class="property-item"
                     >
                       <div class="property-row">
-                        <div class="property-main">
+                        <div
+                          class="property-main ${bindable.canExpand ? 'expandable' : ''}"
+                          click.trigger="handlePropertyRowClick(bindable, $event)"
+                        >
                           <button
                             class="expand-button"
                             css="visibility: ${bindable.canExpand ? 'visible' : 'hidden'}"
@@ -429,7 +430,10 @@
                             class="child-property"
                           >
                             <div class="property-row">
-                              <div class="property-main">
+                              <div
+                                class="property-main ${childProp.canExpand ? 'expandable' : ''}"
+                                click.trigger="handlePropertyRowClick(childProp, $event)"
+                              >
                                 <button
                                   class="expand-button"
                                   css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}"
@@ -509,7 +513,10 @@
                   <ul class="properties-list" else>
                     <li repeat.for="property of selectedElement.properties" class="property-item">
                       <div class="property-row">
-                        <div class="property-main">
+                        <div
+                          class="property-main ${property.canExpand ? 'expandable' : ''}"
+                          click.trigger="handlePropertyRowClick(property, $event)"
+                        >
                           <button class="expand-button" css="visibility: ${property.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(property)">
                             <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${property.isExpanded ? 'expanded' : ''}">
                               <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -533,7 +540,10 @@
                           <div if.bind="!property.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                           <div repeat.for="childProp of property.expandedValue.properties" class="child-property">
                             <div class="property-row">
-                              <div class="property-main">
+                              <div
+                                class="property-main ${childProp.canExpand ? 'expandable' : ''}"
+                                click.trigger="handlePropertyRowClick(childProp, $event)"
+                              >
                                 <button class="expand-button" css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(childProp)">
                                   <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${childProp.isExpanded ? 'expanded' : ''}">
                                     <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -557,7 +567,10 @@
                                 <div if.bind="!childProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                 <div repeat.for="nestedProp of childProp.expandedValue.properties" class="child-property">
                                   <div class="property-row">
-                                    <div class="property-main">
+                                    <div
+                                      class="property-main ${nestedProp.canExpand ? 'expandable' : ''}"
+                                      click.trigger="handlePropertyRowClick(nestedProp, $event)"
+                                    >
                                       <button class="expand-button" css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(nestedProp)">
                                         <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${nestedProp.isExpanded ? 'expanded' : ''}">
                                           <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -581,7 +594,10 @@
                                       <div if.bind="!nestedProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                       <div repeat.for="deepProp of nestedProp.expandedValue.properties" class="child-property">
                                         <div class="property-row">
-                                          <div class="property-main">
+                                          <div
+                                            class="property-main ${deepProp.canExpand ? 'expandable' : ''}"
+                                            click.trigger="handlePropertyRowClick(deepProp, $event)"
+                                          >
                                             <button class="expand-button" css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deepProp)">
                                               <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deepProp.isExpanded ? 'expanded' : ''}">
                                                 <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -601,11 +617,14 @@
                                             </span>
                                           </div>
 
-                                          <div if.bind="deepProp.isExpanded && deepProp.expandedValue" class="property-children">
-                                            <div if.bind="!deepProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
-                                            <div repeat.for="deeperProp of deepProp.expandedValue.properties" class="child-property">
-                                              <div class="property-row">
-                                                <div class="property-main">
+                                        <div if.bind="deepProp.isExpanded && deepProp.expandedValue" class="property-children">
+                                          <div if.bind="!deepProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
+                                          <div repeat.for="deeperProp of deepProp.expandedValue.properties" class="child-property">
+                                            <div class="property-row">
+                                              <div
+                                                class="property-main ${deeperProp.canExpand ? 'expandable' : ''}"
+                                                click.trigger="handlePropertyRowClick(deeperProp, $event)"
+                                              >
                                                   <button class="expand-button" css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deeperProp)">
                                                     <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deeperProp.isExpanded ? 'expanded' : ''}">
                                                       <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -653,7 +672,10 @@
                   <ul class="properties-list" else>
                     <li repeat.for="ctrlProp of selectedElement.controller.properties" class="property-item">
                       <div class="property-row">
-                        <div class="property-main">
+                        <div
+                          class="property-main ${ctrlProp.canExpand ? 'expandable' : ''}"
+                          click.trigger="handlePropertyRowClick(ctrlProp, $event)"
+                        >
                           <button class="expand-button" css="visibility: ${ctrlProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(ctrlProp)">
                             <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${ctrlProp.isExpanded ? 'expanded' : ''}">
                               <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -678,7 +700,10 @@
                           <ul class="properties-list" if.bind="ctrlProp.expandedValue && ctrlProp.expandedValue.properties.length">
                             <li repeat.for="nested of ctrlProp.expandedValue.properties" class="property-item">
                               <div class="property-row">
-                                <div class="property-main">
+                                <div
+                                  class="property-main ${nested.canExpand ? 'expandable' : ''}"
+                                  click.trigger="handlePropertyRowClick(nested, $event)"
+                                >
                                   <button class="expand-button" css="visibility: ${nested.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(nested)">
                                     <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${nested.isExpanded ? 'expanded' : ''}">
                                       <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -703,7 +728,10 @@
                                   <ul class="properties-list" if.bind="nested.expandedValue && nested.expandedValue.properties.length">
                                     <li repeat.for="deep of nested.expandedValue.properties" class="property-item">
                                       <div class="property-row">
-                                        <div class="property-main">
+                                        <div
+                                          class="property-main ${deep.canExpand ? 'expandable' : ''}"
+                                          click.trigger="handlePropertyRowClick(deep, $event)"
+                                        >
                                           <button class="expand-button" css="visibility: ${deep.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deep)">
                                             <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deep.isExpanded ? 'expanded' : ''}">
                                               <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -728,7 +756,10 @@
                                           <ul class="properties-list" if.bind="deep.expandedValue && deep.expandedValue.properties.length">
                                             <li repeat.for="deeper of deep.expandedValue.properties" class="property-item">
                                               <div class="property-row">
-                                                <div class="property-main">
+                                                <div
+                                                  class="property-main ${deeper.canExpand ? 'expandable' : ''}"
+                                                  click.trigger="handlePropertyRowClick(deeper, $event)"
+                                                >
                                                   <button class="expand-button" css="visibility: ${deeper.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deeper)">
                                                     <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deeper.isExpanded ? 'expanded' : ''}">
                                                       <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -770,7 +801,10 @@
                                   class="child-property"
                                 >
                                   <div class="property-row">
-                                    <div class="property-main">
+                                    <div
+                                      class="property-main ${nestedProp.canExpand ? 'expandable' : ''}"
+                                      click.trigger="handlePropertyRowClick(nestedProp, $event)"
+                                    >
                                       <button
                                         class="expand-button"
                                         css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}"
@@ -847,7 +881,10 @@
                                         class="child-property"
                                       >
                                         <div class="property-row">
-                                          <div class="property-main">
+                                          <div
+                                            class="property-main ${deepProp.canExpand ? 'expandable' : ''}"
+                                            click.trigger="handlePropertyRowClick(deepProp, $event)"
+                                          >
                                             <button
                                               class="expand-button"
                                               css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}"
@@ -914,7 +951,10 @@
                                               class="child-property"
                                             >
                                               <div class="property-row">
-                                                <div class="property-main">
+                                                <div
+                                                  class="property-main ${deeperProp.canExpand ? 'expandable' : ''}"
+                                                  click.trigger="handlePropertyRowClick(deeperProp, $event)"
+                                                >
                                                   <button
                                                     class="expand-button"
                                                     css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}"
@@ -1014,7 +1054,10 @@
                         <ul class="properties-list" else>
                           <li repeat.for="bindable of attribute.bindables" class="property-item">
                             <div class="property-row">
-                              <div class="property-main">
+                              <div
+                                class="property-main ${bindable.canExpand ? 'expandable' : ''}"
+                                click.trigger="handlePropertyRowClick(bindable, $event)"
+                              >
                                 <button
                                   class="expand-button"
                                   css="visibility: ${bindable.canExpand ? 'visible' : 'hidden'}"
@@ -1052,7 +1095,10 @@
                                 <div if.bind="!bindable.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                 <div repeat.for="childProp of bindable.expandedValue.properties" class="child-property">
                                   <div class="property-row">
-                                    <div class="property-main">
+                                    <div
+                                      class="property-main ${childProp.canExpand ? 'expandable' : ''}"
+                                      click.trigger="handlePropertyRowClick(childProp, $event)"
+                                    >
                                       <button class="expand-button" css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(childProp)">
                                         <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${childProp.isExpanded ? 'expanded' : ''}">
                                           <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1072,7 +1118,10 @@
                                       <div if.bind="!childProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                       <div repeat.for="nestedProp of childProp.expandedValue.properties" class="child-property">
                                         <div class="property-row">
-                                          <div class="property-main">
+                                          <div
+                                            class="property-main ${nestedProp.canExpand ? 'expandable' : ''}"
+                                            click.trigger="handlePropertyRowClick(nestedProp, $event)"
+                                          >
                                             <button class="expand-button" css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(nestedProp)">
                                               <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${nestedProp.isExpanded ? 'expanded' : ''}">
                                                 <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1092,7 +1141,10 @@
                                             <div if.bind="!nestedProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                             <div repeat.for="deepProp of nestedProp.expandedValue.properties" class="child-property">
                                               <div class="property-row">
-                                                <div class="property-main">
+                                                <div
+                                                  class="property-main ${deepProp.canExpand ? 'expandable' : ''}"
+                                                  click.trigger="handlePropertyRowClick(deepProp, $event)"
+                                                >
                                                   <button class="expand-button" css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deepProp)">
                                                     <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deepProp.isExpanded ? 'expanded' : ''}">
                                                       <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1116,7 +1168,10 @@
                                                   <div if.bind="!deepProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                                   <div repeat.for="deeperProp of deepProp.expandedValue.properties" class="child-property">
                                                     <div class="property-row">
-                                                      <div class="property-main">
+                                                      <div
+                                                        class="property-main ${deeperProp.canExpand ? 'expandable' : ''}"
+                                                        click.trigger="handlePropertyRowClick(deeperProp, $event)"
+                                                      >
                                                         <button class="expand-button" css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deeperProp)">
                                                           <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deeperProp.isExpanded ? 'expanded' : ''}">
                                                             <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1163,7 +1218,10 @@
                         <ul class="properties-list" else>
                           <li repeat.for="property of attribute.properties" class="property-item">
                             <div class="property-row">
-                              <div class="property-main">
+                              <div
+                                class="property-main ${property.canExpand ? 'expandable' : ''}"
+                                click.trigger="handlePropertyRowClick(property, $event)"
+                              >
                                 <button class="expand-button" css="visibility: ${property.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(property)">
                                   <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${property.isExpanded ? 'expanded' : ''}">
                                     <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1183,7 +1241,10 @@
                                 <div if.bind="!property.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                 <div repeat.for="childProp of property.expandedValue.properties" class="child-property">
                                   <div class="property-row">
-                                    <div class="property-main">
+                                    <div
+                                      class="property-main ${childProp.canExpand ? 'expandable' : ''}"
+                                      click.trigger="handlePropertyRowClick(childProp, $event)"
+                                    >
                                       <button class="expand-button" css="visibility: ${childProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(childProp)">
                                         <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${childProp.isExpanded ? 'expanded' : ''}">
                                           <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1207,7 +1268,10 @@
                                       <div if.bind="!childProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                       <div repeat.for="nestedProp of childProp.expandedValue.properties" class="child-property">
                                         <div class="property-row">
-                                          <div class="property-main">
+                                          <div
+                                            class="property-main ${nestedProp.canExpand ? 'expandable' : ''}"
+                                            click.trigger="handlePropertyRowClick(nestedProp, $event)"
+                                          >
                                             <button class="expand-button" css="visibility: ${nestedProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(nestedProp)">
                                               <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${nestedProp.isExpanded ? 'expanded' : ''}">
                                                 <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1231,7 +1295,10 @@
                                             <div if.bind="!nestedProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
                                             <div repeat.for="deepProp of nestedProp.expandedValue.properties" class="child-property">
                                               <div class="property-row">
-                                                <div class="property-main">
+                                                <div
+                                                  class="property-main ${deepProp.canExpand ? 'expandable' : ''}"
+                                                  click.trigger="handlePropertyRowClick(deepProp, $event)"
+                                                >
                                                   <button class="expand-button" css="visibility: ${deepProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deepProp)">
                                                     <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deepProp.isExpanded ? 'expanded' : ''}">
                                                       <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
@@ -1253,9 +1320,12 @@
 
                                                 <div if.bind="deepProp.isExpanded && deepProp.expandedValue" class="property-children">
                                                   <div if.bind="!deepProp.expandedValue.properties.length" class="empty-object">Object has no enumerable properties</div>
-                                                  <div repeat.for="deeperProp of deepProp.expandedValue.properties" class="child-property">
-                                                    <div class="property-row">
-                                                      <div class="property-main">
+                                            <div repeat.for="deeperProp of deepProp.expandedValue.properties" class="child-property">
+                                              <div class="property-row">
+                                                <div
+                                                  class="property-main ${deeperProp.canExpand ? 'expandable' : ''}"
+                                                  click.trigger="handlePropertyRowClick(deeperProp, $event)"
+                                                >
                                                         <button class="expand-button" css="visibility: ${deeperProp.canExpand ? 'visible' : 'hidden'}" click.trigger="togglePropertyExpansion(deeperProp)">
                                                           <svg width="8" height="8" viewBox="0 0 8 8" class="expand-icon ${deeperProp.isExpanded ? 'expanded' : ''}">
                                                             <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
