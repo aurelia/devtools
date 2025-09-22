@@ -420,8 +420,12 @@
     @apply py-2;
   }
   
+  .component-tree-row {
+    @apply w-full;
+  }
+  
   .component-item {
-    @apply flex items-center px-4 py-1 cursor-pointer transition-colors min-h-6;
+    @apply flex items-center gap-2 py-1 pr-4 cursor-pointer transition-colors min-h-6 rounded-sm;
   }
   
   .component-item:hover {
@@ -431,6 +435,10 @@
   .component-item.selected {
     @apply bg-blue-50 text-blue-600 font-medium;
   }
+
+  .component-item.selected .component-name.custom-attribute {
+    @apply text-red-600;
+  }
   
   .dark .component-item:hover {
     @apply bg-gray-800;
@@ -439,10 +447,18 @@
   .dark .component-item.selected {
     @apply bg-blue-900 text-blue-400;
   }
+
+  .dark .component-item.selected .component-name.custom-attribute {
+    @apply text-red-300;
+  }
   
   .expand-toggle {
     @apply bg-transparent border-none p-0 mr-1 w-3 h-3 flex items-center justify-center 
            cursor-pointer text-gray-600;
+  }
+
+  .expand-toggle[disabled] {
+    @apply cursor-default opacity-60;
   }
   
   .expand-toggle:hover {
@@ -466,7 +482,7 @@
   }
   
   .component-icon {
-    @apply mr-1.5 flex items-center flex-shrink-0;
+    @apply flex items-center flex-shrink-0;
   }
   
   .component-icon.custom-element {
@@ -507,15 +523,75 @@
   }
   
   .component-badge {
-    @apply bg-blue-50 text-blue-600 text-xs font-semibold px-1 rounded-full ml-2 min-w-4 text-center;
+    @apply bg-blue-50 text-blue-600 text-[10px] font-semibold px-1 rounded-full ml-2 min-w-4 text-center;
   }
   
   .dark .component-badge {
     @apply bg-blue-900 text-blue-400;
   }
   
-  .component-children {
-    @apply ml-5 border-l border-gray-100;
+  .view-mode-toggle {
+    @apply flex items-center gap-1 ml-2;
+  }
+
+  .view-mode-icon {
+    @apply text-sm leading-none;
+  }
+
+  .component-breadcrumbs {
+    @apply flex items-center gap-1 text-[11px] text-gray-500 mb-2 flex-wrap;
+  }
+
+  .component-breadcrumbs .breadcrumb-item {
+    @apply bg-transparent border-none px-1 py-0.5 rounded-sm cursor-pointer text-gray-600;
+  }
+
+  .component-breadcrumbs .breadcrumb-item.custom-element {
+    @apply text-blue-600;
+  }
+
+  .component-breadcrumbs .breadcrumb-item.custom-attribute {
+    @apply text-red-600 italic;
+  }
+
+  .component-breadcrumbs .breadcrumb-item:hover {
+    @apply bg-gray-100 text-gray-800;
+  }
+
+  .component-breadcrumbs .breadcrumb-item.active {
+    @apply font-medium bg-blue-50;
+  }
+
+  .dark .component-breadcrumbs {
+    @apply text-gray-400;
+  }
+
+  .dark .component-breadcrumbs .breadcrumb-item {
+    @apply text-gray-300;
+  }
+
+  .dark .component-breadcrumbs .breadcrumb-item.custom-element {
+    @apply text-blue-300;
+  }
+
+  .dark .component-breadcrumbs .breadcrumb-item.custom-attribute {
+    @apply text-red-300 italic;
+  }
+
+  .dark .component-breadcrumbs .breadcrumb-item:hover {
+    @apply bg-white/10 text-gray-100;
+  }
+
+  .dark .component-breadcrumbs .breadcrumb-item.active {
+    @apply font-medium bg-blue-900;
+  }
+
+  .breadcrumb-separator {
+    @apply text-gray-400 text-xs;
+  }
+
+  .dark .breadcrumb-separator {
+    @apply text-gray-500;
   }
   
   .dark .component-children {
@@ -600,7 +676,19 @@
   }
   
   .property-main {
-    @apply flex items-center py-0 min-h-4;
+    @apply flex items-center py-0 min-h-4 gap-1.5;
+  }
+
+  .property-main.expandable {
+    @apply cursor-pointer;
+  }
+
+  .property-main.expandable:hover .property-name {
+    @apply text-blue-600;
+  }
+
+  .dark .property-main.expandable:hover .property-name {
+    @apply text-blue-300;
   }
   
   .property-name {
@@ -680,6 +768,26 @@
   .property-value.function {
     color: var(--color-syntax-boolean);
     @apply font-medium italic;
+  }
+
+  .expand-button {
+    @apply flex items-center justify-center w-5 h-5 mr-2 rounded-sm border border-transparent text-gray-500;
+  }
+
+  .expand-button:hover {
+    @apply bg-gray-200 border-gray-300;
+  }
+
+  .dark .expand-button {
+    @apply text-gray-300;
+  }
+
+  .dark .expand-button:hover {
+    @apply bg-gray-700 border-gray-600;
+  }
+
+  .expand-button svg {
+    pointer-events: none;
   }
   
   .dark .property-value:hover {

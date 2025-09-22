@@ -8,7 +8,7 @@ export function stubPlatform() {
 
 export function stubDebugHost(overrides: Partial<Record<string, any>> = {}) {
   return {
-    getAllComponents: jest.fn().mockResolvedValue([]),
+    getAllComponents: jest.fn().mockResolvedValue({ tree: [], flat: [] }),
     updateValues: jest.fn(),
     highlightComponent: jest.fn(),
     unhighlightComponent: jest.fn(),

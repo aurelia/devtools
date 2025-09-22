@@ -4,8 +4,10 @@ import { DebugHost } from '@/backend/debug-host';
 
 /** Minimal App consumer stub */
 class AppConsumerStub {
-  allAureliaObjects: any[] = [];
-  buildComponentTree = jest.fn();
+  componentSnapshot = { tree: [], flat: [] };
+  handleComponentSnapshot = jest.fn((snapshot) => {
+    this.componentSnapshot = snapshot;
+  });
   onElementPicked = jest.fn();
 }
 
@@ -26,21 +28,27 @@ describe('DebugHost', () => {
     const fallback = [{ customElementInfo: { name: 'x', key: 'k', bindables: [], properties: [], aliases: [] }, customAttributesInfo: [] }];
     ChromeTest.setEvalToReturn([
       { result: [] },
-      { result: [] },
-      { result: fallback },
+      { result: { kind: 'flat', data: [] } },
+      { result: { kind: 'flat', data: fallback } },
     ]);
 
     const result = await host.getAllComponents();
-    expect(Array.isArray(result)).toBe(true);
-    expect(result).toEqual(fallback);
+    expect(result).toEqual({ tree: [], flat: fallback });
   });
 
   it('getAllComponents returns immediate non-empty result', async () => {
-    const first = [{ customElementInfo: { name: 'A', key: 'A', bindables: [], properties: [], aliases: [] }, customAttributesInfo: [] }];
-    ChromeTest.setEvalToReturn([{ result: first }]);
+    const first = [{
+      id: 'root',
+      domPath: 'html > body > root:nth-of-type(1)',
+      tagName: 'app-root',
+      customElementInfo: { name: 'app-root', key: 'app-root', bindables: [], properties: [], aliases: [] },
+      customAttributesInfo: [],
+      children: [],
+    }];
+    ChromeTest.setEvalToReturn([{ result: { kind: 'tree', data: first } }]);
 
     const result = await host.getAllComponents();
-    expect(result).toEqual(first);
+    expect(result).toEqual({ tree: first, flat: [] });
   });
 
   it('highlightComponent/unhighlightComponent call inspectedWindow.eval with injected code', () => {

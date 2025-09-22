@@ -29,9 +29,23 @@ export interface IControllerInfo {
 }
 
 export type AureliaInfo = {
-  customElementInfo: IControllerInfo;
+  customElementInfo: IControllerInfo | null;
   customAttributesInfo: IControllerInfo[];
 };
+
+export interface AureliaComponentTreeNode {
+  id: string;
+  domPath: string;
+  tagName: string | null;
+  customElementInfo: IControllerInfo | null;
+  customAttributesInfo: IControllerInfo[];
+  children: AureliaComponentTreeNode[];
+}
+
+export interface AureliaComponentSnapshot {
+  tree: AureliaComponentTreeNode[];
+  flat: AureliaInfo[];
+}
 
 export interface AureliaHooks {
   currentAttributes: IComponentController[];
