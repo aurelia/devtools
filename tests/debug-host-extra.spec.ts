@@ -5,8 +5,8 @@ import { DebugHost } from '@/backend/debug-host';
 class ConsumerStub {
   followChromeSelection = false;
   onElementPicked = jest.fn();
-  buildComponentTree = jest.fn();
-  allAureliaObjects: any[] = [];
+  handleComponentSnapshot = jest.fn();
+  componentSnapshot = { tree: [], flat: [] };
 }
 
 describe('DebugHost additional behaviors', () => {

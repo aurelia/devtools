@@ -3,7 +3,7 @@ import { ChromeTest } from './setup';
 // We instantiate App without running field initializers to avoid DI
 let AppClass: any;
 import { stubDebugHost, stubPlatform, nextTick } from './helpers';
-import type { AureliaInfo, IControllerInfo, Property } from '@/shared/types';
+import type { AureliaComponentTreeNode, AureliaInfo, IControllerInfo, Property } from '@/shared/types';
 
 function ci(name: string, key?: string): IControllerInfo {
   return {
@@ -42,9 +42,12 @@ describe('App core logic', () => {
     (app as any).selectedElementAttributes = undefined;
     (app as any).allAureliaObjects = undefined;
     (app as any).componentTree = [];
-    (app as any).filteredComponentTree = [];
+    (app as any).componentSnapshot = { tree: [], flat: [] };
     (app as any).selectedComponentId = undefined;
+    (app as any).selectedBreadcrumb = [];
+    (app as any).selectedNodeType = 'custom-element';
     (app as any).searchQuery = '';
+    (app as any).viewMode = 'tree';
     (app as any).isElementPickerActive = false;
     (app as any).aureliaDetected = false;
     (app as any).aureliaVersion = null;
@@ -57,14 +60,36 @@ describe('App core logic', () => {
     (app as any).plat = plat;
   });
 
-  describe('createComponentHierarchy', () => {
+  function rawNode(
+    id: string,
+    element: IControllerInfo | null,
+    attrs: IControllerInfo[] = [],
+    children: AureliaComponentTreeNode[] = [],
+    domPath: string = ''
+  ): AureliaComponentTreeNode {
+    return {
+      id,
+      domPath,
+      tagName: element?.name ?? null,
+      customElementInfo: element,
+      customAttributesInfo: attrs,
+      children,
+    };
+  }
+
+  function applyTree(nodes: AureliaComponentTreeNode[]) {
+    (app as any).handleComponentSnapshot({ tree: nodes, flat: [] });
+    return (app as any).componentTree as any[];
+  }
+
+  describe('handleComponentSnapshot', () => {
     it('builds nodes, filters duplicate attrs by key/name, sets hasAttributes and sorts', () => {
       const element = ci('todo-item', 'todo-item');
-      const dupAttr = ci('todo-item', 'todo-item'); // duplicate name/key should be filtered
+      const dupAttr = ci('todo-item', 'todo-item');
       const realAttr = ci('selectable', 'selectable');
-      const comps: AureliaInfo[] = [ai(element, [dupAttr, realAttr])];
 
-      const tree = (app as any).createComponentHierarchy(comps);
+      const tree = applyTree([rawNode('todo', element, [dupAttr, realAttr])]);
+
       expect(tree).toHaveLength(1);
       const node = tree[0];
       expect(node.type).toBe('custom-element');
@@ -74,20 +99,22 @@ describe('App core logic', () => {
       expect(node.children[0].name).toBe('selectable');
     });
 
-    it('includes standalone custom attributes without parent element', () => {
-      const attrOnly = ai(null as any, [ci('draggable')]);
-      const tree = (app as any).createComponentHierarchy([attrOnly]);
+    it('lifts standalone custom attributes without parent element', () => {
+      const attrInfo = ci('draggable');
+      const tree = applyTree([rawNode('attr-only', null as any, [attrInfo])]);
+
       expect(tree).toHaveLength(1);
       expect(tree[0].type).toBe('custom-attribute');
+      expect(tree[0].name).toBe('draggable');
     });
   });
 
   describe('tab filtering and search filtering', () => {
     function seedTree() {
-      const e1 = ai(ci('alpha'), [ci('attr-a'), ci('attr-b')]);
-      const e2 = ai(ci('beta'));
-      app.buildComponentTree([e1, e2]);
-      return (app as any).componentTree as any[];
+      return applyTree([
+        rawNode('alpha', ci('alpha'), [ci('attr-a'), ci('attr-b')]),
+        rawNode('beta', ci('beta'), []),
+      ]);
     }
 
     it('filteredComponentTreeByTab returns only elements for components tab', () => {
@@ -141,8 +168,7 @@ describe('App core logic', () => {
       const element = ci('alpha', 'alpha');
       const dupAttr = ci('alpha', 'alpha');
       const otherAttr = ci('x', 'x');
-      const tree = (app as any).createComponentHierarchy([ai(element, [dupAttr, otherAttr])]);
-      (app as any).componentTree = tree;
+      const tree = applyTree([rawNode('alpha', element, [dupAttr, otherAttr])]);
 
       app.selectComponent(tree[0].id);
       expect(app.selectedElement?.name).toBe('alpha');
@@ -153,8 +179,7 @@ describe('App core logic', () => {
     it('selectComponent sets selectedElement to attribute and clears attributes list for attribute node', () => {
       const element = ci('alpha');
       const otherAttr = ci('x');
-      const tree = (app as any).createComponentHierarchy([ai(element, [otherAttr])]);
-      (app as any).componentTree = tree;
+      const tree = applyTree([rawNode('alpha', element, [otherAttr])]);
       const attrNode = tree[0].children[0];
 
       app.selectComponent(attrNode.id);
@@ -163,12 +188,61 @@ describe('App core logic', () => {
     });
 
     it('toggleComponentExpansion toggles expanded state', () => {
-      const tree = (app as any).createComponentHierarchy([ai(ci('alpha'))]);
-      (app as any).componentTree = tree;
+      const tree = applyTree([rawNode('alpha', ci('alpha'))]);
       const id = tree[0].id;
       expect(tree[0].expanded).toBe(false);
       app.toggleComponentExpansion(id);
       expect(((app as any).findComponentById(id).expanded)).toBe(true);
+    });
+
+    it('onElementPicked selects component using DOM path when provided', () => {
+     const tree = applyTree([
+        rawNode('root', ci('root'), [], [
+          rawNode('child', ci('child'), [], [], 'html > body > child')
+        ], 'html > body > root')
+      ]);
+
+      const pickInfo = {
+        customElementInfo: ci('child'),
+        customAttributesInfo: [],
+        __auDevtoolsDomPath: 'html > body > child'
+      } as any;
+
+      app.onElementPicked(pickInfo);
+
+      expect(app.selectedComponentId).toBe('child');
+      expect(app.selectedElement?.name).toBe('child');
+    });
+
+    it('handlePropertyRowClick toggles expansion when clicking label area', () => {
+      const prop: any = { canExpand: true, isExpanded: false };
+      const event: any = {
+        target: document.createElement('span'),
+        stopPropagation: jest.fn(),
+      };
+      const spy = jest.spyOn(app, 'togglePropertyExpansion');
+      (event.target as HTMLElement).classList.add('property-name');
+
+      app.handlePropertyRowClick(prop, event);
+
+      expect(spy).toHaveBeenCalledWith(prop);
+      spy.mockRestore();
+    });
+
+    it('handlePropertyRowClick ignores clicks in value wrapper', () => {
+      const prop: any = { canExpand: true, isExpanded: false };
+      const valueEl = document.createElement('span');
+      valueEl.className = 'property-value-wrapper';
+      const event: any = {
+        target: valueEl,
+        stopPropagation: jest.fn(),
+      };
+      const spy = jest.spyOn(app, 'togglePropertyExpansion');
+
+      app.handlePropertyRowClick(prop, event);
+
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
     });
   });
 
@@ -234,10 +308,13 @@ describe('App core logic', () => {
 
   describe('highlighting delegates to debugHost', () => {
     it('highlightComponent forwards minimal payload', () => {
-      const tree = (app as any).createComponentHierarchy([ai(ci('alpha'), [ci('x')])]);
-      (app as any).componentTree = tree;
+      const tree = applyTree([rawNode('alpha', ci('alpha'), [ci('x')])]);
       app.highlightComponent(tree[0]);
-      expect(debugHost.highlightComponent).toHaveBeenCalled();
+      expect(debugHost.highlightComponent).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'alpha',
+        type: 'custom-element',
+        customElementInfo: expect.objectContaining({ name: 'alpha' }),
+      }));
     });
 
     it('unhighlightComponent forwards to debugHost', () => {
