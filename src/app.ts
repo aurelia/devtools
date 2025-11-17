@@ -482,26 +482,25 @@ export class App implements ICustomElementViewModel {
   }
 
   private filterTreeByType(nodes: ComponentNode[], type: 'custom-element' | 'custom-attribute'): ComponentNode[] {
+    if (!nodes || !nodes.length) {
+      return [];
+    }
+
     const filtered: ComponentNode[] = [];
 
     for (const node of nodes) {
+      const filteredChildren = this.filterTreeByType(node.children || [], type);
+
       if (node.type === type) {
-        // Include this node
         filtered.push({
           ...node,
-          children: this.filterTreeByType(node.children, type)
+          children: filteredChildren,
         });
-      } else {
-        // Check if any children match the type
-        const filteredChildren = this.filterTreeByType(node.children, type);
-        if (filteredChildren.length > 0) {
-          // Include parent with filtered children
-          filtered.push({
-            ...node,
-            children: filteredChildren,
-            expanded: true // Auto-expand to show matching children
-          });
-        }
+        continue;
+      }
+
+      if (filteredChildren.length) {
+        filtered.push(...filteredChildren);
       }
     }
 

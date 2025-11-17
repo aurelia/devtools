@@ -117,28 +117,22 @@ describe('App core logic', () => {
       ]);
     }
 
+    function nodesAreType(nodes: any[], type: 'custom-element' | 'custom-attribute'): boolean {
+      return nodes.every((node) => node.type === type && nodesAreType(node.children || [], type));
+    }
+
     it('filteredComponentTreeByTab returns only elements for components tab', () => {
       seedTree();
       app.activeTab = 'components';
       const filtered = app.filteredComponentTreeByTab;
-      expect(filtered.every(n => n.type === 'custom-element' || n.children?.length)).toBe(true);
+      expect(nodesAreType(filtered, 'custom-element')).toBe(true);
     });
 
-    it('filteredComponentTreeByTab returns only attributes for attributes tab (preserving parent chain where applicable)', () => {
+    it('filteredComponentTreeByTab returns only attributes for attributes tab', () => {
       seedTree();
       app.activeTab = 'attributes';
       const filtered = app.filteredComponentTreeByTab;
-      // Should contain nodes but any included parent has children of attributes
-      function allChildrenAreAttr(nodes: any[]): boolean {
-        for (const n of nodes) {
-          if (n.type === 'custom-attribute') continue;
-          if (n.children?.length) {
-            if (!allChildrenAreAttr(n.children)) return false;
-          }
-        }
-        return true;
-      }
-      expect(allChildrenAreAttr(filtered)).toBe(true);
+      expect(nodesAreType(filtered, 'custom-attribute')).toBe(true);
     });
 
     it('search returns parents of matching descendants and auto-expands them', () => {
