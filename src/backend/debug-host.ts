@@ -26,8 +26,85 @@ export class DebugHost implements ICustomElementViewModel {
         if (this.consumer && (this.consumer as any).followChromeSelection === false) {
           return;
         }
+        const selectionEval = `
+          (function() {
+            const target = typeof $0 !== 'undefined' ? $0 : null;
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || !hook.getCustomElementInfo || !target) {
+              return null;
+            }
+
+            function getDomPath(element) {
+              if (!element || element.nodeType !== 1) {
+                return '';
+              }
+
+              const segments = [];
+              let current = element;
+
+              while (current && current.nodeType === 1 && current !== document) {
+                const tag = current.tagName ? current.tagName.toLowerCase() : 'unknown';
+                let index = 1;
+                let sibling = current;
+
+                while ((sibling = sibling.previousElementSibling)) {
+                  if (sibling.tagName === current.tagName) {
+                    index++;
+                  }
+                }
+
+                segments.push(tag + ':nth-of-type(' + index + ')');
+                current = current.parentElement;
+              }
+
+              segments.push('html');
+              return segments.reverse().join(' > ');
+            }
+
+            const info = hook.getCustomElementInfo(target);
+            if (!info) {
+              return null;
+            }
+
+            let hostElement = null;
+            if (typeof hook.findElementByComponentInfo === 'function') {
+              try {
+                hostElement = hook.findElementByComponentInfo(info) || null;
+              } catch (err) {
+                hostElement = null;
+              }
+            }
+
+            if (!hostElement) {
+              if (target.nodeType === 1) {
+                hostElement = target;
+              } else if (target.parentElement) {
+                hostElement = target.parentElement;
+              }
+            }
+
+            if (hostElement) {
+              const domPath = getDomPath(hostElement);
+              if (domPath) {
+                info.__auDevtoolsDomPath = domPath;
+                if (info.customElementInfo) {
+                  info.customElementInfo.__auDevtoolsDomPath = domPath;
+                }
+                if (Array.isArray(info.customAttributesInfo)) {
+                  info.customAttributesInfo.forEach(function(attr) {
+                    if (attr) {
+                      attr.__auDevtoolsDomPath = domPath;
+                    }
+                  });
+                }
+              }
+            }
+
+            return info;
+          })();
+        `;
         chrome.devtools.inspectedWindow.eval(
-          `window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ && window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.getCustomElementInfo($0)`,
+          selectionEval,
           (debugObject: AureliaInfo) => {
             if (!debugObject) return;
             // Sync the selection in our panel/component tree

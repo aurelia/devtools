@@ -51,6 +51,14 @@ describe('DebugHost', () => {
     expect(result).toEqual({ tree: first, flat: [] });
   });
 
+  it('injects DOM path metadata when syncing Chrome selection', () => {
+    ChromeTest.triggerSelectionChanged();
+    expect(chrome.devtools.inspectedWindow.eval).toHaveBeenCalled();
+    const code = (chrome.devtools.inspectedWindow.eval as jest.Mock).mock.calls[0][0];
+    expect(code).toContain('__auDevtoolsDomPath');
+    expect(code).toContain('getDomPath');
+  });
+
   it('highlightComponent/unhighlightComponent call inspectedWindow.eval with injected code', () => {
     host.highlightComponent({ name: 'Comp' });
     expect(chrome.devtools.inspectedWindow.eval).toHaveBeenCalled();
