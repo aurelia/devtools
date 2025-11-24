@@ -9,6 +9,8 @@ export function stubPlatform() {
 export function stubDebugHost(overrides: Partial<Record<string, any>> = {}) {
   return {
     getAllComponents: jest.fn().mockResolvedValue({ tree: [], flat: [] }),
+    getExternalPanelsSnapshot: jest.fn().mockResolvedValue({ version: 0, panels: [] }),
+    emitExternalPanelEvent: jest.fn().mockResolvedValue(true),
     updateValues: jest.fn(),
     highlightComponent: jest.fn(),
     unhighlightComponent: jest.fn(),

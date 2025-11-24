@@ -1,4 +1,4 @@
-import { AureliaComponentSnapshot, AureliaInfo, IControllerInfo, Property } from '../shared/types';
+import { AureliaComponentSnapshot, AureliaInfo, ExternalPanelSnapshot, IControllerInfo, Property } from '../shared/types';
 import { App } from './../app';
 import { ICustomElementViewModel } from 'aurelia';
 
@@ -280,6 +280,77 @@ export class DebugHost implements ICustomElementViewModel {
       } else {
         resolve({ tree: [], flat: [] });
       }
+    });
+  }
+
+  getExternalPanelsSnapshot(): Promise<ExternalPanelSnapshot> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve({ version: 0, panels: [] });
+        return;
+      }
+
+      const expression = `
+        (function() {
+          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || typeof hook.getExternalPanelsSnapshot !== 'function') {
+            return { version: 0, panels: [] };
+          }
+          try {
+            return hook.getExternalPanelsSnapshot();
+          } catch (error) {
+            return { version: 0, panels: [] };
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(
+        expression,
+        (result: ExternalPanelSnapshot) => {
+          if (!result || typeof result !== 'object') {
+            resolve({ version: 0, panels: [] });
+            return;
+          }
+          const version = typeof result.version === 'number' ? result.version : 0;
+          const panels = Array.isArray(result.panels) ? result.panels : [];
+          resolve({ version, panels });
+        }
+      );
+    });
+  }
+
+  emitExternalPanelEvent(eventName: string, payload: Record<string, unknown> = {}): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(false);
+        return;
+      }
+
+      let serializedPayload = '{}';
+      try {
+        serializedPayload = JSON.stringify(payload || {});
+      } catch {
+        serializedPayload = '{}';
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (hook && typeof hook.emitDevtoolsEvent === 'function') {
+              return hook.emitDevtoolsEvent(${JSON.stringify(eventName)}, ${serializedPayload});
+            }
+            window.dispatchEvent(new CustomEvent(${JSON.stringify(eventName)}, { detail: ${serializedPayload} }));
+            return true;
+          } catch (error) {
+            return false;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: boolean) => {
+        resolve(Boolean(result));
+      });
     });
   }
 

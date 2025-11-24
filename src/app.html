@@ -12,7 +12,7 @@
 
   <main class="devtools-main">
     <!-- Main Tab - Split Pane Layout (All/Components/Attributes) -->
-    <div class="h-full flex flex-col">
+    <div if.bind="!isExternalTabActive" class="h-full flex flex-col">
       <div class="components-split-pane">
         <!-- Left Panel - Component Tree -->
         <div class="components-tree-panel">
@@ -160,6 +160,15 @@
               >
                 Check Again
               </button>
+            </div>
+
+            <div if.bind="detectionState === 'disabled'" class="empty-components">
+              <div class="empty-icon">🛑</div>
+              <h3>Aurelia DevTools disabled</h3>
+              <p>
+                This application has opted out of Aurelia DevTools inspections.
+                Remove the opt-out flag on the page to re-enable the inspector.
+              </p>
             </div>
 
             <div if.bind="aureliaDetected && !componentTree.length" class="empty-components">
@@ -676,6 +685,87 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div if.bind="isExternalTabActive" class="plugin-panel">
+      <div class="plugin-panel-header">
+        <div class="plugin-panel-title">
+          <span class="plugin-panel-icon">${activeExternalIcon}</span>
+          <div class="plugin-panel-copy">
+            <h2 class="plugin-panel-heading">${activeExternalTitle}</h2>
+            <p class="plugin-panel-description" if.bind="activeExternalDescription">${activeExternalDescription}</p>
+          </div>
+        </div>
+        <div class="plugin-panel-actions">
+          <button
+            class="toolbar-button"
+            click.trigger="refreshActiveExternalTab()"
+            disabled.bind="isActiveExternalLoading"
+          >
+            ${isActiveExternalLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+      <div class="plugin-panel-body">
+        <div if.bind="isActiveExternalLoading" class="plugin-state plugin-state--loading">
+          <div class="empty-icon">⏳</div>
+          <p>Loading panel data…</p>
+        </div>
+        <div if.bind="!isActiveExternalLoading && activeExternalError" class="plugin-state plugin-state--error">
+          <div class="empty-icon">⚠️</div>
+          <p>${activeExternalError}</p>
+          <button class="refresh-button" click.trigger="refreshActiveExternalTab()">Try Again</button>
+        </div>
+        <div if.bind="!isActiveExternalLoading && !activeExternalError && !activeExternalResult" class="plugin-state plugin-state--empty">
+          <div class="empty-icon">🧩</div>
+          <p>No panel data available yet.</p>
+          <button class="refresh-button" click.trigger="refreshActiveExternalTab()">Refresh</button>
+        </div>
+        <div if.bind="activeExternalResult && !isActiveExternalLoading && !activeExternalError" class="plugin-content">
+          <div class="plugin-summary" if.bind="activeExternalResult.summary">
+            ${activeExternalResult.summary}
+          </div>
+          <div class="plugin-sections" if.bind="activeExternalResult.sections && activeExternalResult.sections.length">
+            <section repeat.for="section of activeExternalResult.sections" class="plugin-section">
+              <div class="plugin-section-header">
+                <h3>${section.title || 'Details'}</h3>
+                <p if.bind="section.description">${section.description}</p>
+              </div>
+              <dl class="plugin-rows" if.bind="section.rows && section.rows.length">
+                <div repeat.for="row of section.rows" class="plugin-row">
+                  <dt>
+                    ${row.label || 'Value'}
+                    <span class="plugin-row-hint" if.bind="row.hint">${row.hint}</span>
+                  </dt>
+                  <dd>
+                    <pre if.bind="row.format === 'json'">${JSON.stringify(row.value, null, 2)}</pre>
+                    <code if.bind="row.format === 'code'">${row.value}</code>
+                    <span if.bind="!row.format || row.format === 'text'">${row.value}</span>
+                  </dd>
+                </div>
+              </dl>
+              <div class="plugin-table-wrapper" if.bind="section.table && section.table.rows && section.table.rows.length">
+                <table class="plugin-table">
+                  <thead if.bind="section.table.columns && section.table.columns.length">
+                    <tr>
+                      <th repeat.for="col of section.table.columns">${col}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr repeat.for="row of section.table.rows">
+                      <td repeat.for="cell of row">${cell}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+          <div class="plugin-json" if.bind="activeExternalResult.data">
+            <h3>Data</h3>
+            <pre>${JSON.stringify(activeExternalResult.data, null, 2)}</pre>
           </div>
         </div>
       </div>

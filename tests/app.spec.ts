@@ -36,8 +36,18 @@ describe('App core logic', () => {
     // Create instance without running field initializers (avoid DI resolve calls)
     app = Object.create(AppClass.prototype);
     // Seed essential fields
+    (app as any).coreTabs = [
+      { id: 'all', label: 'All', icon: '🌲', kind: 'core' },
+      { id: 'components', label: 'Components', icon: '📦', kind: 'core' },
+      { id: 'attributes', label: 'Attributes', icon: '🔧', kind: 'core' },
+    ];
     (app as any).activeTab = 'all';
-    (app as any).tabs = [];
+    (app as any).tabs = [...(app as any).coreTabs];
+    (app as any).externalTabs = [];
+    (app as any).externalPanels = {};
+    (app as any).externalPanelsVersion = 0;
+    (app as any).externalPanelLoading = {};
+    (app as any).externalRefreshHandle = null;
     (app as any).selectedElement = undefined;
     (app as any).selectedElementAttributes = undefined;
     (app as any).allAureliaObjects = undefined;
@@ -237,6 +247,67 @@ describe('App core logic', () => {
 
       expect(spy).not.toHaveBeenCalled();
       spy.mockRestore();
+    });
+  });
+
+  describe('external panel integration', () => {
+    it('refreshExternalPanels merges snapshot into tabs', async () => {
+      const snapshot = {
+        version: 1,
+        panels: [{ id: 'store', label: 'Store Debugger', icon: '🧠', summary: 'hello' }],
+      };
+      debugHost.getExternalPanelsSnapshot.mockResolvedValue(snapshot);
+
+      await app.refreshExternalPanels(true);
+
+      expect(app.tabs.some((tab: any) => tab.id === 'external:store')).toBe(true);
+      expect((app as any).externalPanels.store.summary).toBe('hello');
+    });
+
+    it('switchTab triggers external refresh helpers', () => {
+      const spy = jest.spyOn(app, 'refreshExternalPanels').mockResolvedValue(undefined as any);
+      (app as any).externalTabs = [{ id: 'external:store', label: 'Store', icon: '🧩', kind: 'external', panelId: 'store' }];
+      (app as any).tabs = [...(app as any).coreTabs, ...(app as any).externalTabs];
+
+      app.switchTab('external:store');
+
+      expect(spy).toHaveBeenCalledWith(true);
+    });
+
+    it('refreshActiveExternalTab emits request event', () => {
+      (app as any).externalTabs = [{ id: 'external:store', label: 'Store', icon: '🧩', kind: 'external', panelId: 'store' }];
+      (app as any).tabs = [...(app as any).coreTabs, ...(app as any).externalTabs];
+      debugHost.emitExternalPanelEvent.mockResolvedValue(true);
+      app.activeTab = 'external:store';
+
+      app.refreshActiveExternalTab();
+
+      expect(debugHost.emitExternalPanelEvent).toHaveBeenCalledWith(
+        'aurelia-devtools:request-panel',
+        expect.objectContaining({ id: 'store' })
+      );
+    });
+
+    it('applySelectionFromNode notifies external panels when active', () => {
+      const node: any = {
+        id: 'alpha',
+        type: 'custom-element',
+        domPath: 'html > body:nth-of-type(1)',
+        children: [],
+        expanded: false,
+        hasAttributes: false,
+        name: 'alpha',
+        tagName: 'div',
+        data: { kind: 'element', info: ai(ci('alpha')), raw: null },
+      };
+      app.activeTab = 'external:store';
+
+      (app as any).applySelectionFromNode(node);
+
+      expect(debugHost.emitExternalPanelEvent).toHaveBeenCalledWith(
+        'aurelia-devtools:selection-changed',
+        expect.objectContaining({ selectedComponentId: 'alpha' })
+      );
     });
   });
 

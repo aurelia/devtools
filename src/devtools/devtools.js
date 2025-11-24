@@ -2,6 +2,40 @@ let panelCreated = false;
 let detectedVersion = null;
 let elementsSidebarPane = null;
 
+const optOutCheckExpression = `
+  (function() {
+    try {
+      const w = window;
+      const doc = w.document;
+      const meta = doc && doc.querySelector('meta[name="aurelia-devtools"]');
+      const metaContent = (meta && meta.getAttribute('content') || '').toLowerCase();
+      const rootAttr = (doc && doc.documentElement && doc.documentElement.getAttribute('data-aurelia-devtools') || '').toLowerCase();
+      const disabled =
+        w.__AURELIA_DEVTOOLS_DISABLED__ === true ||
+        w.__AURELIA_DEVTOOLS_DISABLE__ === true ||
+        w.AURELIA_DEVTOOLS_DISABLE === true ||
+        metaContent.includes('disable') ||
+        metaContent.includes('off') ||
+        rootAttr === 'disable' ||
+        rootAttr === 'disabled' ||
+        rootAttr === 'off';
+      if (disabled) {
+        w.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'disabled';
+        w.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = null;
+        w.__AURELIA_DEVTOOLS_VERSION__ = null;
+      }
+      return disabled;
+    } catch (e) {
+      return false;
+    }
+  })()
+`;
+
+function installHooksIfAllowed() {
+  // hooksAsStringv2 contains its own opt-out guard; a lightweight single eval keeps installation robust
+  chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
+}
+
 // Always create the panel immediately
 function createAureliaPanel() {
   if (panelCreated) return;
@@ -16,13 +50,15 @@ function createAureliaPanel() {
     function (panel) {
       panelCreated = true;
 
-      // Set initial detection state to false - let the app handle detection
+      // Set initial detection state to false - let the app handle detection unless opted out
       chrome.devtools.inspectedWindow.eval(`
-        window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'checking';
+        if (!(${optOutCheckExpression})) {
+          window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'checking';
+        }
       `);
 
   // Proactively install hooks when the panel opens
-  chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
+  installHooksIfAllowed();
     }
   );
 }
@@ -43,11 +79,11 @@ function createElementsSidebar() {
     }
 
     // Ensure hooks are installed when sidebar opens
-    chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
+    installHooksIfAllowed();
 
     if (pageSet) {
       try {
-        pane.onShown.addListener(() => chrome.devtools.inspectedWindow.eval(hooksAsStringv2));
+        pane.onShown.addListener(() => installHooksIfAllowed());
       } catch {}
     } else {
       const updateSidebar = () => {
@@ -97,8 +133,11 @@ createElementsSidebar();
 // Listen for Aurelia detection messages
 chrome.runtime.onMessage.addListener((req, sender) => {
   if (sender.tab && req.aureliaDetected && req.version) {
-    detectedVersion = req.version;
-    updateDetectionState(req.version);
+    chrome.devtools.inspectedWindow.eval(optOutCheckExpression, (disabled, isException) => {
+      if (isException || disabled) return;
+      detectedVersion = req.version;
+      updateDetectionState(req.version);
+    });
   }
 });
 
@@ -108,8 +147,12 @@ chrome.devtools.inspectedWindow.eval(
   `
   // Return the detected version if available, or try to detect
   (function() {
+    if (${optOutCheckExpression}) {
+      return { status: 'disabled', version: null };
+    }
+
     if (window.__AURELIA_DEVTOOLS_DETECTED_VERSION__) {
-      return window.__AURELIA_DEVTOOLS_DETECTED_VERSION__;
+      return { status: 'detected', version: window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ };
     }
 
     // Try to detect Aurelia directly
@@ -146,23 +189,27 @@ chrome.devtools.inspectedWindow.eval(
 
     if (version) {
       window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = version;
+      window.__AURELIA_DEVTOOLS_VERSION__ = version;
+      window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'detected';
+      return { status: 'detected', version };
     }
 
-    return version;
+    window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'not-found';
+    return { status: 'not-found', version: null };
   })();
 `,
   (result, isException) => {
     if (isException) {
-    } else if (result) {
-      detectedVersion = result;
-      updateDetectionState(result);
-    } else {
-      // Set detection state to 'not-found' if nothing detected initially
-      if (panelCreated) {
-        chrome.devtools.inspectedWindow.eval(`
-          window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'not-found';
-        `);
-      }
+      return;
+    } else if (result && result.status === 'disabled') {
+      detectedVersion = null;
+    } else if (result && result.status === 'detected' && result.version) {
+      detectedVersion = result.version;
+      updateDetectionState(result.version);
+    } else if (panelCreated && result && result.status === 'not-found') {
+      chrome.devtools.inspectedWindow.eval(`
+        window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'not-found';
+      `);
     }
   }
 );
@@ -183,11 +230,19 @@ function install(debugValueLookup) {
     typeof Symbol === "function"
       ? Symbol("au-devtools-map-entry")
       : "__au_devtools_map_entry__";
+  const externalPanels = new Map();
+  let externalPanelsVersion = 0;
+  registerExternalPanelBridge();
 
   const hooks = {
     Aurelia: undefined,
     currentElement: undefined,
     currentAttributes: [],
+    getExternalPanelsSnapshot: () => ({
+      version: externalPanelsVersion,
+      panels: Array.from(externalPanels.values()),
+    }),
+    emitDevtoolsEvent: (eventName, payload) => emitDevtoolsEvent(eventName, payload),
     getAllInfo: (root) => {
       root = root ?? document.body;
       return [
@@ -488,6 +543,280 @@ function install(debugValueLookup) {
   }
 
   return { hooks, debugValueLookup };
+
+  function registerExternalPanelBridge() {
+    try {
+      window.addEventListener('aurelia-devtools-panel-data', handleExternalPanelData, true);
+      window.addEventListener('aurelia-devtools-panel-remove', handleExternalPanelRemove, true);
+      window.addEventListener('aurelia-devtools-panel-clear', clearExternalPanels, true);
+      window.dispatchEvent(
+        new CustomEvent('aurelia-devtools-ready', {
+          detail: {
+            version: window.__AURELIA_DEVTOOLS_VERSION__ || window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ || null,
+          },
+        })
+      );
+    } catch {}
+  }
+
+  function handleExternalPanelData(event) {
+    if (!event || !event.detail) {
+      return;
+    }
+    upsertExternalPanel(event.detail);
+  }
+
+  function handleExternalPanelRemove(event) {
+    if (!event || !event.detail) {
+      return;
+    }
+    const identifier = event.detail.id || event.detail.panelId;
+    if (!identifier) {
+      return;
+    }
+    const id = String(identifier);
+    if (externalPanels.delete(id)) {
+      externalPanelsVersion += 1;
+    }
+  }
+
+  function clearExternalPanels() {
+    externalPanels.clear();
+    externalPanelsVersion += 1;
+  }
+
+  function upsertExternalPanel(detail) {
+    const normalized = normalizeExternalPanel(detail);
+    if (!normalized) {
+      return;
+    }
+    externalPanels.set(normalized.id, normalized);
+    externalPanelsVersion += 1;
+  }
+
+  function normalizeExternalPanel(detail) {
+    if (!detail) {
+      return null;
+    }
+
+    const identifier = detail.id || detail.panelId || detail.name;
+    if (!identifier) {
+      return null;
+    }
+
+    const id = String(identifier);
+    const labelSource = detail.label || detail.title || detail.name || id;
+    const label =
+      typeof labelSource === 'string' && labelSource.trim()
+        ? labelSource.trim().slice(0, 80)
+        : id;
+    const icon =
+      typeof detail.icon === 'string' && detail.icon.trim()
+        ? detail.icon.trim().slice(0, 4)
+        : '🧩';
+    const description =
+      typeof detail.description === 'string'
+        ? detail.description.trim().slice(0, 400)
+        : undefined;
+    const order =
+      typeof detail.order === 'number' && !isNaN(detail.order)
+        ? detail.order
+        : 0;
+
+    const result = normalizePanelResult(detail, id, label);
+    return {
+      id,
+      label,
+      icon,
+      description,
+      order,
+      ...result,
+    };
+  }
+
+  function normalizePanelResult(detail, id, label) {
+    const normalized = {
+      status: typeof detail.status === 'string' ? detail.status : 'ok',
+      pluginId: id,
+      title: typeof detail.title === 'string' ? detail.title : undefined,
+      summary:
+        typeof detail.summary === 'string'
+          ? detail.summary
+          : typeof detail.description === 'string'
+            ? detail.description
+            : undefined,
+      sections: normalizeSections(detail.sections || detail.blocks || detail.groups) || undefined,
+      data:
+        detail.data !== undefined
+          ? sanitizeForTransport(detail.data)
+          : detail.payload !== undefined
+            ? sanitizeForTransport(detail.payload)
+            : undefined,
+      raw: detail.raw !== undefined ? sanitizeForTransport(detail.raw) : undefined,
+      table: normalizeTable(detail.table),
+      error: typeof detail.error === 'string' ? detail.error : undefined,
+      timestamp: typeof detail.timestamp === 'number' ? detail.timestamp : Date.now(),
+    };
+
+    if (!normalized.sections) {
+      const fallbackRows = normalizeRows(detail.rows || detail.entries || detail.items);
+      if (fallbackRows) {
+        normalized.sections = [{ title: label, rows: fallbackRows }];
+      }
+    }
+
+    return normalized;
+  }
+
+  function emitDevtoolsEvent(eventName, payload) {
+    if (!eventName || typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') {
+      return false;
+    }
+    try {
+      window.dispatchEvent(new CustomEvent(eventName, { detail: payload }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function normalizeSections(sections) {
+    if (!Array.isArray(sections)) {
+      return undefined;
+    }
+
+    const normalized = sections
+      .map((section) => {
+        if (!section || typeof section !== 'object') {
+          return null;
+        }
+
+        const rows = normalizeRows(section.rows || section.entries || section.items);
+        const table = normalizeTable(section.table);
+
+        if (!rows && !table) {
+          return null;
+        }
+
+        return {
+          title: typeof section.title === 'string' ? section.title : undefined,
+          description: typeof section.description === 'string' ? section.description : undefined,
+          rows,
+          table,
+        };
+      })
+      .filter((section) => !!section);
+
+    return normalized.length ? normalized : undefined;
+  }
+
+  function normalizeRows(rows) {
+    if (!Array.isArray(rows)) {
+      return undefined;
+    }
+
+    const normalized = rows
+      .map((row) => {
+        if (row == null) {
+          return null;
+        }
+
+        if (typeof row === 'string' || typeof row === 'number' || typeof row === 'boolean') {
+          return {
+            label: '',
+            value: sanitizeForTransport(row),
+            format: typeof row === 'object' ? 'json' : 'text',
+          };
+        }
+
+        if (typeof row === 'object') {
+          const label = typeof row.label === 'string'
+            ? row.label
+            : (typeof row.name === 'string' ? row.name : '');
+          const valueSource = row.value !== undefined ? row.value : (row.text !== undefined ? row.text : row.details);
+          const value = sanitizeForTransport(valueSource);
+          const format = typeof row.format === 'string' ? row.format : (typeof value === 'object' ? 'json' : 'text');
+          const hint = typeof row.hint === 'string' ? row.hint : undefined;
+          return { label, value, format, hint };
+        }
+
+        return null;
+      })
+      .filter((row) => !!row);
+
+    return normalized.length ? normalized : undefined;
+  }
+
+  function normalizeTable(table) {
+    if (!table || typeof table !== 'object') {
+      return undefined;
+    }
+
+    const columns = Array.isArray(table.columns)
+      ? table.columns.map((column) => String(column))
+      : undefined;
+    const rows = Array.isArray(table.rows)
+      ? table.rows
+          .map((row) => (Array.isArray(row) ? row.map((cell) => sanitizeForTransport(cell)) : null))
+          .filter((row) => !!row)
+      : undefined;
+
+    if ((!columns || !columns.length) && (!rows || !rows.length)) {
+      return undefined;
+    }
+
+    return { columns, rows };
+  }
+
+  function sanitizeForTransport(value, seen) {
+    if (value == null) {
+      return value;
+    }
+
+    if (!seen) {
+      seen = new Set();
+    }
+
+    if (typeof value === 'function') {
+      return value.name ? `[Function: ${value.name}]` : '[Function]';
+    }
+
+    if (typeof Node !== 'undefined' && value instanceof Node) {
+      return `[${value.nodeName || 'Node'}]`;
+    }
+
+    if (typeof value === 'object') {
+      if (seen.has(value)) {
+        return '[Circular]';
+      }
+      seen.add(value);
+
+      if (Array.isArray(value)) {
+        const mapped = value.map((item) => sanitizeForTransport(item, seen));
+        seen.delete(value);
+        return mapped;
+      }
+
+      if (value instanceof Error) {
+        const errorPayload = {
+          message: value.message,
+          stack: value.stack,
+          name: value.name,
+        };
+        seen.delete(value);
+        return errorPayload;
+      }
+
+      const output = {};
+      Object.keys(value).forEach((key) => {
+        output[key] = sanitizeForTransport(value[key], seen);
+      });
+      seen.delete(value);
+      return output;
+    }
+
+    return value;
+  }
 
   function extractControllerInfo(controller) {
     if (!controller) return null;
@@ -1181,18 +1510,28 @@ function install(debugValueLookup) {
  * Manifest v3 approach to evaluate code in the context of the inspected window.
  */
 const hooksAsStringv2 = `
-  var globalDebugValueLookup;
-  var installedData = (${install.toString()})(globalDebugValueLookup)
-  var {hooks} = installedData;
-  window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ = hooks;
-  globalDebugValueLookup = installedData.debugValueLookup;
+  (function() {
+    if (${optOutCheckExpression}) {
+      return;
+    }
+    if (window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ && window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.__au_devtools_installed__) {
+      return;
+    }
+    var globalDebugValueLookup = window.__AURELIA_DEVTOOLS_DEBUG_LOOKUP__;
+    var installedData = (${install.toString()})(globalDebugValueLookup);
+    var hooks = installedData.hooks;
+    window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ = hooks;
+    window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.__au_devtools_installed__ = true;
+    globalDebugValueLookup = installedData.debugValueLookup;
+    window.__AURELIA_DEVTOOLS_DEBUG_LOOKUP__ = globalDebugValueLookup;
+  })();
   `;
 
 chrome.runtime.onConnect.addListener((port) => {
-  chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
+  installHooksIfAllowed();
 });
 
 // Also re-install hooks on navigation to handle SPA reloads and page loads
 chrome.devtools.network.onNavigated.addListener(() => {
-  chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
+  installHooksIfAllowed();
 });

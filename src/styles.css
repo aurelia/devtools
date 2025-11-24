@@ -1148,11 +1148,232 @@
     @apply text-gray-500;
   }
 
-  .max-depth-indicator {
-    @apply text-xs text-gray-500 italic ml-2;
+.max-depth-indicator {
+  @apply text-xs text-gray-500 italic ml-2;
+}
+
+.dark .max-depth-indicator {
+  @apply text-gray-400;
+}
+
+  /* Plugin Panel */
+  .plugin-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    padding: 16px;
   }
 
-  .dark .max-depth-indicator {
-    @apply text-gray-400;
+  .dark .plugin-panel {
+    background: rgba(0, 0, 0, 0.35);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .plugin-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .plugin-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .plugin-panel-icon {
+    font-size: 28px;
+  }
+
+  .plugin-panel-heading {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  .plugin-panel-description {
+    margin: 4px 0 0;
+    color: rgba(0, 0, 0, 0.65);
+    font-size: 13px;
+  }
+
+  .dark .plugin-panel-description {
+    color: rgba(255, 255, 255, 0.65);
+  }
+
+  .plugin-panel-body {
+    flex: 1;
+    border-radius: 8px;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.05);
+    overflow-y: auto;
+  }
+
+  .dark .plugin-panel-body {
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  .plugin-state {
+    text-align: center;
+    padding: 48px 12px;
+    color: rgba(0, 0, 0, 0.65);
+  }
+
+  .dark .plugin-state {
+    color: rgba(255, 255, 255, 0.75);
+  }
+
+  .plugin-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .plugin-summary {
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 12px;
+    border-radius: 8px;
+    background: rgba(25, 103, 210, 0.1);
+    border: 1px solid rgba(25, 103, 210, 0.35);
+  }
+
+  .plugin-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .plugin-section {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  .dark .plugin-section {
+    background: rgba(0, 0, 0, 0.25);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .plugin-section-header h3 {
+    margin: 0 0 4px;
+    font-size: 15px;
+  }
+
+  .plugin-section-header p {
+    margin: 0;
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .dark .plugin-section-header p {
+    color: rgba(255, 255, 255, 0.65);
+  }
+
+  .plugin-rows {
+    margin: 12px 0 0;
+  }
+
+  .plugin-row {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 12px;
+    font-size: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  }
+
+  .dark .plugin-row {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .plugin-row:last-child {
+    border-bottom: none;
+  }
+
+  .plugin-row dt {
+    font-weight: 600;
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  .dark .plugin-row dt {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .plugin-row-hint {
+    display: block;
+    font-weight: 400;
+    font-size: 11px;
+    color: rgba(0, 0, 0, 0.45);
+  }
+
+  .dark .plugin-row-hint {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .plugin-row dd {
+    margin: 0;
+  }
+
+  .plugin-row pre,
+  .plugin-row code {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .dark .plugin-row pre,
+  .dark .plugin-row code {
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .plugin-table-wrapper {
+    overflow-x: auto;
+    margin-top: 12px;
+  }
+
+  .plugin-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .plugin-table th,
+  .plugin-table td {
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    padding: 6px 8px;
+    text-align: left;
+  }
+
+  .dark .plugin-table th,
+  .dark .plugin-table td {
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .plugin-json {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.85);
+  }
+
+  .dark .plugin-json {
+    background: rgba(0, 0, 0, 0.35);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .plugin-json pre {
+    margin: 0;
+    max-height: 320px;
+    overflow: auto;
+    font-size: 12px;
   }
 }

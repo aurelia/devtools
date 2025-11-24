@@ -4,7 +4,7 @@ import {
   ICustomElementViewModel,
   IPlatform,
 } from 'aurelia';
-import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, Property } from './shared/types';
+import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, ExternalPanelContext, ExternalPanelDefinition, ExternalPanelSnapshot, PluginDevtoolsResult, Property } from './shared/types';
 import { resolve } from '@aurelia/kernel';
 
 export class App implements ICustomElementViewModel {
@@ -13,12 +13,18 @@ export class App implements ICustomElementViewModel {
   JSON = JSON;
 
   // Tab management
-  activeTab: 'all' | 'components' | 'attributes' = 'all';
-  tabs = [
-    { id: 'all', label: 'All', icon: '🌲' },
-    { id: 'components', label: 'Components', icon: '📦' },
-    { id: 'attributes', label: 'Attributes', icon: '🔧' },
+  private readonly coreTabs: DevtoolsTabDefinition[] = [
+    { id: 'all', label: 'All', icon: '🌲', kind: 'core' },
+    { id: 'components', label: 'Components', icon: '📦', kind: 'core' },
+    { id: 'attributes', label: 'Attributes', icon: '🔧', kind: 'core' },
   ];
+  activeTab: string = 'all';
+  tabs: DevtoolsTabDefinition[] = [...this.coreTabs];
+  externalTabs: DevtoolsTabDefinition[] = [];
+  externalPanels: Record<string, ExternalPanelDefinition> = {};
+  private externalPanelsVersion = 0;
+  private externalPanelLoading: Record<string, boolean> = {};
+  private externalRefreshHandle: ReturnType<typeof setTimeout> | null = null;
 
   // Inspector tab data
   selectedElement: IControllerInfo = undefined;
@@ -43,7 +49,7 @@ export class App implements ICustomElementViewModel {
   // Detection status
   aureliaDetected: boolean = false;
   aureliaVersion: number | null = null;
-  detectionState: 'checking' | 'detected' | 'not-found' = 'checking';
+  detectionState: 'checking' | 'detected' | 'not-found' | 'disabled' = 'checking';
 
   private debugHost: DebugHost = resolve(DebugHost);
   private plat: IPlatform = resolve(IPlatform);
@@ -82,6 +88,7 @@ export class App implements ICustomElementViewModel {
 
     // Poll for detection state changes
     this.startDetectionPolling();
+    this.refreshExternalPanels();
   }
 
   get currentController() {
@@ -104,6 +111,11 @@ export class App implements ICustomElementViewModel {
                 this.aureliaVersion = result.version;
                 this.detectionState = 'detected';
                 break;
+              case 'disabled':
+                this.aureliaDetected = false;
+                this.aureliaVersion = null;
+                this.detectionState = 'disabled';
+                break;
               case 'not-found':
                 this.aureliaDetected = false;
                 this.aureliaVersion = null;
@@ -124,10 +136,14 @@ export class App implements ICustomElementViewModel {
     // Poll for detection state changes every 2 seconds
     setInterval(() => {
       this.checkDetectionState();
+      if (this.detectionState === 'disabled') {
+        return;
+      }
       // Keep trying to load until we find components, regardless of detection flags
       if (!this.allAureliaObjects?.length) {
         this.loadAllComponents();
       }
+      this.refreshExternalPanels();
     }, 2000);
   }
 
@@ -139,20 +155,203 @@ export class App implements ICustomElementViewModel {
   }
 
   // Tab management methods
-  switchTab(tabId: 'all' | 'components' | 'attributes') {
+  switchTab(tabId: string) {
     this.activeTab = tabId;
-    // Auto-refresh components when switching to any tab
-    this.loadAllComponents();
+    if (this.isCoreTab(tabId)) {
+      this.loadAllComponents();
+    } else {
+      this.refreshExternalPanels(true);
+      this.notifyExternalSelection();
+    }
+  }
+
+  get isExternalTabActive(): boolean {
+    return this.isExternalTab(this.activeTab);
+  }
+
+  get activeExternalIcon(): string {
+    return this.getActiveExternalPanel()?.icon || '🧩';
+  }
+
+  get activeExternalTitle(): string {
+    return this.getActiveExternalPanel()?.label || 'Inspector';
+  }
+
+  get activeExternalDescription(): string | undefined {
+    return this.getActiveExternalPanel()?.description;
+  }
+
+  get activeExternalResult(): PluginDevtoolsResult | undefined {
+    return this.getActiveExternalPanel();
+  }
+
+  get activeExternalError(): string | null {
+    const panel = this.getActiveExternalPanel();
+    if (!panel) {
+      return null;
+    }
+    return panel.status === 'error' ? panel.error || 'Panel error' : null;
+  }
+
+  get isActiveExternalLoading(): boolean {
+    const panelId = this.getExternalPanelIdFromTab(this.activeTab);
+    if (!panelId) {
+      return false;
+    }
+    return !!this.externalPanelLoading[panelId];
+  }
+
+  refreshActiveExternalTab() {
+    if (!this.isExternalTabActive) {
+      return;
+    }
+    this.requestExternalPanelRefresh();
+  }
+
+  private getActiveExternalPanel(): ExternalPanelDefinition | undefined {
+    const panelId = this.getExternalPanelIdFromTab(this.activeTab);
+    if (!panelId) {
+      return undefined;
+    }
+    return this.externalPanels[panelId];
+  }
+
+  private isCoreTab(tabId: string): tabId is CoreTabId {
+    return tabId === 'all' || tabId === 'components' || tabId === 'attributes';
+  }
+
+  private isExternalTab(tabId: string): boolean {
+    return !!this.getExternalPanelIdFromTab(tabId);
+  }
+
+  private getExternalPanelIdFromTab(tabId: string): string | null {
+    if (!tabId) {
+      return null;
+    }
+    if (tabId.startsWith('external:')) {
+      return tabId.slice('external:'.length);
+    }
+    const panel = this.externalTabs.find((tab) => tab.id === tabId && tab.panelId);
+    return panel?.panelId || null;
+  }
+
+  refreshExternalPanels(force = false): Promise<void> {
+    if (this.detectionState === 'disabled') {
+      return Promise.resolve();
+    }
+
+    return this.debugHost
+      .getExternalPanelsSnapshot()
+      .then((snapshot: ExternalPanelSnapshot) => {
+        if (!snapshot) {
+          return;
+        }
+        if (!force && snapshot.version === this.externalPanelsVersion) {
+          return;
+        }
+        this.externalPanelsVersion = snapshot.version;
+        this.applyExternalPanels(snapshot);
+      })
+      .catch((error) => {
+        console.warn('Failed to load external Aurelia panels', error);
+      });
+  }
+
+  private applyExternalPanels(snapshot: ExternalPanelSnapshot) {
+    const nextPanels: Record<string, ExternalPanelDefinition> = {};
+    const tabs = (snapshot.panels || [])
+      .filter((panel) => panel && panel.id)
+      .map((panel) => {
+        nextPanels[panel.id] = panel;
+        this.externalPanelLoading[panel.id] = false;
+        return {
+          id: `external:${panel.id}`,
+          label: panel.label || panel.id,
+          icon: panel.icon || '🧩',
+          kind: 'external' as const,
+          panelId: panel.id,
+          description: panel.description,
+          order: panel.order ?? 0,
+        };
+      })
+      .sort((a, b) => {
+        const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+        if (orderDiff !== 0) {
+          return orderDiff;
+        }
+        return a.label.localeCompare(b.label);
+      });
+
+    this.externalPanels = nextPanels;
+    this.externalTabs = tabs;
+    this.tabs = [...this.coreTabs, ...this.externalTabs];
+
+    if (!this.tabs.some((tab) => tab.id === this.activeTab)) {
+      this.activeTab = 'all';
+    }
+  }
+
+  private requestExternalPanelRefresh() {
+    if (this.detectionState === 'disabled') {
+      return;
+    }
+    const panelId = this.getExternalPanelIdFromTab(this.activeTab);
+    if (!panelId) {
+      return;
+    }
+    this.setExternalPanelLoading(panelId, true);
+    this.debugHost.emitExternalPanelEvent('aurelia-devtools:request-panel', {
+      id: panelId,
+      context: this.buildExternalPanelContext(),
+    });
+    this.scheduleExternalPanelRefresh();
+  }
+
+  private scheduleExternalPanelRefresh(delay = 150) {
+    if (this.externalRefreshHandle) {
+      clearTimeout(this.externalRefreshHandle);
+    }
+    this.externalRefreshHandle = setTimeout(() => {
+      this.refreshExternalPanels(true);
+      this.externalRefreshHandle = null;
+    }, delay);
+  }
+
+  private setExternalPanelLoading(panelId: string, isLoading: boolean) {
+    this.externalPanelLoading[panelId] = isLoading;
+  }
+
+  private buildExternalPanelContext(): ExternalPanelContext {
+    const selectedNode = this.selectedComponentId ? this.findComponentById(this.selectedComponentId) : null;
+    const selectedInfo = selectedNode ? selectedNode.data.info : null;
+
+    return {
+      selectedComponentId: this.selectedComponentId,
+      selectedNodeType: selectedNode?.type,
+      selectedDomPath: selectedNode?.domPath,
+      aureliaVersion: this.aureliaVersion,
+      selectedInfo,
+    };
+  }
+
+  private notifyExternalSelection() {
+    this.debugHost.emitExternalPanelEvent('aurelia-devtools:selection-changed', this.buildExternalPanelContext());
   }
 
   // Component discovery methods
   loadAllComponents(): Promise<void> {
+    if (this.detectionState === 'disabled') {
+      this.handleComponentSnapshot({ tree: [], flat: [] });
+      return Promise.resolve();
+    }
+
     return new Promise((resolve, reject) => {
       this.plat.queueMicrotask(() => {
         this.debugHost
           .getAllComponents()
           .then((snapshot) => {
             this.handleComponentSnapshot(snapshot);
+            this.refreshExternalPanels();
 
             const hasData = !!(snapshot?.tree?.length || snapshot?.flat?.length);
             if (hasData) {
@@ -371,10 +570,14 @@ export class App implements ICustomElementViewModel {
   }
 
   get filteredComponentTreeByTab(): ComponentNode[] {
+    if (!this.isCoreTab(this.activeTab)) {
+      return [];
+    }
+
     // First apply tab filtering to the full tree
     let tabFilteredTree: ComponentNode[];
 
-    switch (this.activeTab) {
+    switch (this.activeTab as CoreTabId) {
       case 'components':
         tabFilteredTree = this.filterTreeByType(this.componentTree, 'custom-element');
         break;
@@ -555,6 +758,11 @@ export class App implements ICustomElementViewModel {
     } else {
       this.selectedBreadcrumb = [node];
     }
+
+    if (this.isExternalTabActive) {
+      this.scheduleExternalPanelRefresh();
+    }
+    this.notifyExternalSelection();
   }
 
   private findNodePathById(nodeId: string): ComponentNode[] | null {
@@ -1185,6 +1393,18 @@ type ComponentNodeData =
 interface ComponentDisplayNode {
   node: ComponentNode;
   depth: number;
+}
+
+type CoreTabId = 'all' | 'components' | 'attributes';
+
+interface DevtoolsTabDefinition {
+  id: string;
+  label: string;
+  icon: string;
+  kind: 'core' | 'external';
+  panelId?: string;
+  description?: string;
+  order?: number;
 }
 
 export class StringifyValueConverter implements ValueConverterInstance {
