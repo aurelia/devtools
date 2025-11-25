@@ -11,8 +11,8 @@
   </nav>
 
   <main class="devtools-main">
-    <!-- Main Tab - Split Pane Layout (All/Components/Attributes) -->
-    <div if.bind="!isExternalTabActive" class="h-full flex flex-col">
+    <!-- Main Tab - Components / Attributes -->
+    <div if.bind="!isExternalTabActive && activeTab !== 'interactions'" class="h-full flex flex-col">
       <div class="components-split-pane">
         <!-- Left Panel - Component Tree -->
         <div class="components-tree-panel">
@@ -114,7 +114,7 @@
               <input
                 class="search-input"
                 type="text"
-                placeholder="Search components..."
+                placeholder="Search (MyComponent, my-component...)"
                 value.bind="searchQuery"
                 input.trigger="filterComponents()"
               />
@@ -395,6 +395,15 @@
                               >
                             </span>
 
+                            <span
+                              if.bind="row.property.expression && !row.property.isEditing"
+                              class="property-expression"
+                              title="Template expression using this property"
+                            >
+                              <span class="expression-label">used in:</span>
+                              <code class="expression-code">${row.property.expression}</code>
+                            </span>
+
                             <select
                               if.bind="row.property.isEditing && row.property.type === 'boolean'"
                               class="property-editor"
@@ -471,6 +480,15 @@
                               >
                             </span>
 
+                            <span
+                              if.bind="row.property.expression && !row.property.isEditing"
+                              class="property-expression"
+                              title="Template expression using this property"
+                            >
+                              <span class="expression-label">used in:</span>
+                              <code class="expression-code">${row.property.expression}</code>
+                            </span>
+
                             <select
                               if.bind="row.property.isEditing && row.property.type === 'boolean'"
                               class="property-editor"
@@ -545,6 +563,15 @@
                                 if.bind="row.property.type === 'string'"
                                 >"</span
                               >
+                            </span>
+
+                            <span
+                              if.bind="row.property.expression && !row.property.isEditing"
+                              class="property-expression"
+                              title="Template expression using this property"
+                            >
+                              <span class="expression-label">used in:</span>
+                              <code class="expression-code">${row.property.expression}</code>
                             </span>
 
                             <select
@@ -626,6 +653,15 @@
                                   >
                                     <span if.bind="row.property.type === 'string'">"</span>${row.property.value}<span if.bind="row.property.type === 'string'">"</span>
                                   </span>
+
+                                  <span
+                                    if.bind="row.property.expression && !row.property.isEditing"
+                                    class="property-expression"
+                                    title="Template expression using this property"
+                                  >
+                                    <span class="expression-label">used in:</span>
+                                    <code class="expression-code">${row.property.expression}</code>
+                                  </span>
                                   <select if.bind="row.property.isEditing && row.property.type === 'boolean'" class="property-editor" value.bind="row.property.value ? 'true' : 'false'" change.trigger="saveProperty(row.property, $event.target.value)" blur.trigger="saveProperty(row.property, $event.target.value)">
                                     <option value="true">true</option>
                                     <option value="false">false</option>
@@ -669,6 +705,14 @@
                                   <span if.bind="!row.property.isEditing" class="property-value ${row.property.type} ${row.property.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="row.property.canEdit ? editProperty(row.property) : null" title="${row.property.canEdit ? 'Double-click to edit' : 'Read-only property'}">
                                     <span if.bind="row.property.type === 'string'">"</span>${row.property.value}<span if.bind="row.property.type === 'string'">"</span>
                                   </span>
+                                  <span
+                                    if.bind="row.property.expression && !row.property.isEditing"
+                                    class="property-expression"
+                                    title="Template expression using this property"
+                                  >
+                                    <span class="expression-label">used in:</span>
+                                    <code class="expression-code">${row.property.expression}</code>
+                                  </span>
                                   <select if.bind="row.property.isEditing && row.property.type === 'boolean'" class="property-editor" value.bind="row.property.value ? 'true' : 'false'" change.trigger="saveProperty(row.property, $event.target.value)" blur.trigger="saveProperty(row.property, $event.target.value)">
                                     <option value="true">true</option>
                                     <option value="false">false</option>
@@ -685,6 +729,77 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Interaction timeline -->
+    <div if.bind="!isExternalTabActive && activeTab === 'interactions'" class="interaction-panel">
+      <div class="interaction-header">
+        <div class="interaction-header-left">
+          <div class="interaction-title">Interaction Timeline</div>
+          <div class="interaction-subtitle">
+            Captured delegate/trigger events with before/after snapshots. Applying snapshots overwrites the component's view-model state.
+          </div>
+        </div>
+        <div class="interaction-actions">
+          <button class="toolbar-button" click.trigger="loadInteractionLog(true)" disabled.bind="interactionLoading">
+            ${interactionLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button class="toolbar-button" click.trigger="clearInteractionLog()" disabled.bind="interactionLoading || !hasInteractions">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div if.bind="interactionError" class="interaction-empty interaction-empty--error">
+        <div class="empty-icon">⚠️</div>
+        <p>Failed to load interactions: ${interactionError}</p>
+        <button class="refresh-button" click.trigger="loadInteractionLog(true)">Retry</button>
+      </div>
+
+      <div if.bind="interactionLoading && !interactionError" class="interaction-empty">
+        <div class="empty-icon">⏳</div>
+        <p>Loading recent interactions…</p>
+      </div>
+
+      <div if.bind="!interactionLoading && !interactionError && !hasInteractions" class="interaction-empty">
+        <div class="empty-icon">🕑</div>
+        <p>No interactions captured yet. Trigger actions in the app to see them here.</p>
+        <button class="refresh-button" click.trigger="loadInteractionLog(true)">Refresh</button>
+      </div>
+
+      <div if.bind="hasInteractions && !interactionLoading && !interactionError" class="interaction-list">
+        <div repeat.for="entry of formattedInteractionLog" class="interaction-row">
+          <div class="interaction-meta">
+            <div class="interaction-event">
+              <span class="interaction-event-name">${entry.eventName}</span>
+              <span class="interaction-mode">${entry.mode || 'delegate'}</span>
+              <span class="interaction-duration" if.bind="entry.duration">· ${entry.duration}ms</span>
+            </div>
+            <div class="interaction-context">
+              <span if.bind="entry.vmName">${entry.vmName}</span>
+              <span if.bind="entry.handlerName">· ${entry.handlerName}</span>
+              <span>· ${new Date(entry.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div class="interaction-path" if.bind="entry.domPath">
+              ${entry.domPath}
+            </div>
+            <div class="interaction-router" if.bind="entry.mode === 'navigation'">
+              <span if.bind="entry.detail?.from">from: ${entry.detail.from}</span>
+              <span if.bind="entry.detail?.to">→ ${entry.detail.to}</span>
+              <span if.bind="entry.detail?.trigger">(${entry.detail.trigger || entry.detail.source || 'router'})</span>
+              <span if.bind="entry.detail?.id">#${entry.detail.id}</span>
+            </div>
+            <div class="interaction-error" if.bind="entry.error">
+              ⚠️ ${entry.error}
+            </div>
+          </div>
+          <div class="interaction-commands">
+            <button class="toolbar-button" click.trigger="clearInteractionLog()" disabled.bind="interactionLoading || !hasInteractions">
+              Clear
+            </button>
           </div>
         </div>
       </div>

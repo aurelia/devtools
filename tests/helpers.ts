@@ -20,6 +20,13 @@ export function stubDebugHost(overrides: Partial<Record<string, any>> = {}) {
     unhighlightComponent: jest.fn(),
     startElementPicker: jest.fn(),
     stopElementPicker: jest.fn(),
+    startPropertyWatching: jest.fn(),
+    stopPropertyWatching: jest.fn(),
+    getPropertySnapshot: jest.fn().mockResolvedValue(null),
+    refreshSelectedComponent: jest.fn().mockResolvedValue(null),
+    checkComponentTreeChanges: jest.fn().mockResolvedValue(false),
+    attach: jest.fn(),
+    revealInElements: jest.fn(),
     ...overrides
   };
 }

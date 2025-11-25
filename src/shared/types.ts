@@ -14,6 +14,7 @@ export interface Property {
   isExpanded?: boolean;
   name: string;
   value: unknown;
+  expression?: string;
   expandedValue?: IControllerInfo;
 }
 
@@ -45,6 +46,37 @@ export interface AureliaComponentTreeNode {
 export interface AureliaComponentSnapshot {
   tree: AureliaComponentTreeNode[];
   flat: AureliaInfo[];
+}
+
+export type InteractionPhase = 'before' | 'after';
+
+export interface EventInteractionRecord {
+  id: string;
+  eventName: string;
+  domPath?: string | null;
+  mode: 'delegate' | 'trigger' | 'capture' | 'navigation' | 'unknown';
+  timestamp: number;
+  duration?: number;
+  vmName?: string;
+  handlerName?: string;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  error?: string | null;
+  replayable?: boolean;
+  canApplySnapshot?: boolean;
+  target?: InteractionTargetHint;
+  eventInit?: Record<string, unknown>;
+  detail?: unknown;
+  stale?: boolean;
+}
+
+export interface InteractionTargetHint {
+  domPath?: string | null;
+  tagName?: string | null;
+  componentName?: string | null;
+  componentKey?: string | null;
+  componentType?: 'custom-element' | 'custom-attribute' | 'unknown';
+  href?: string | null;
 }
 
 export interface PluginDevtoolsTable {
@@ -115,6 +147,10 @@ export interface AureliaHooks {
   ) => Pick<IControllerInfo, 'properties'>;
   getExternalPanelsSnapshot?: () => ExternalPanelSnapshot;
   emitDevtoolsEvent?: (eventName: string, payload?: unknown) => boolean;
+  getInteractionLog?: () => EventInteractionRecord[];
+  replayInteraction?: (id: string) => boolean;
+  applyInteractionSnapshot?: (id: string, phase: InteractionPhase) => boolean;
+  clearInteractionLog?: () => boolean;
 }
 
 type DefaultPayload = {
@@ -126,4 +162,32 @@ type DefaultPayload = {
 export interface IMessages<T = DefaultPayload> {
   type: string;
   payload: T;
+}
+
+export interface PropertyChangeRecord {
+  componentKey: string;
+  propertyName: string;
+  propertyType: 'bindable' | 'property';
+  oldValue: unknown;
+  newValue: unknown;
+  timestamp: number;
+}
+
+export interface ComponentTreeChangeRecord {
+  type: 'added' | 'removed' | 'changed';
+  componentKey: string;
+  componentName: string;
+  timestamp: number;
+}
+
+export interface PropertySnapshot {
+  componentKey: string;
+  bindables: Array<{ name: string; value: unknown; type: string }>;
+  properties: Array<{ name: string; value: unknown; type: string }>;
+  timestamp: number;
+}
+
+export interface WatchOptions {
+  componentKey: string;
+  pollInterval?: number;
 }

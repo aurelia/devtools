@@ -4,7 +4,7 @@ import {
   ICustomElementViewModel,
   IPlatform,
 } from 'aurelia';
-import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, ExternalPanelContext, ExternalPanelDefinition, ExternalPanelSnapshot, PluginDevtoolsResult, Property } from './shared/types';
+import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, EventInteractionRecord, ExternalPanelContext, ExternalPanelDefinition, ExternalPanelSnapshot, InteractionPhase, PluginDevtoolsResult, Property, PropertyChangeRecord, PropertySnapshot } from './shared/types';
 import { resolve } from '@aurelia/kernel';
 
 export class App implements ICustomElementViewModel {
@@ -17,6 +17,7 @@ export class App implements ICustomElementViewModel {
     { id: 'all', label: 'All', icon: '🌲', kind: 'core' },
     { id: 'components', label: 'Components', icon: '📦', kind: 'core' },
     { id: 'attributes', label: 'Attributes', icon: '🔧', kind: 'core' },
+    { id: 'interactions', label: 'Interactions', icon: '⏱️', kind: 'core' },
   ];
   activeTab: string = 'all';
   tabs: DevtoolsTabDefinition[] = [...this.coreTabs];
@@ -45,6 +46,17 @@ export class App implements ICustomElementViewModel {
   // UI: animate refresh icon when user-triggered refresh happens
   isRefreshing: boolean = false;
   propertyRowsRevision: number = 0;
+
+  // Interaction timeline
+  interactionLog: EventInteractionRecord[] = [];
+  interactionLoading: boolean = false;
+  interactionError: string | null = null;
+  private interactionSignature: string = '';
+  private runtimeInteractionListener: ((msg: any, sender: any) => void) | null = null;
+
+  // Property watching
+  private propertyChangeListener: ((msg: any, sender: any) => void) | null = null;
+  private treeChangeListener: ((msg: any, sender: any) => void) | null = null;
 
   // Detection status
   aureliaDetected: boolean = false;
@@ -76,6 +88,13 @@ export class App implements ICustomElementViewModel {
         this.viewMode = persistedViewMode;
       }
     } catch {}
+
+    // Wire interaction push stream from content script
+    this.registerInteractionStream();
+
+    // Wire property and tree change streams
+    this.registerPropertyChangeStream();
+    this.registerTreeChangeStream();
 
     // Check detection state set by devtools.js
     this.checkDetectionState();
@@ -142,6 +161,13 @@ export class App implements ICustomElementViewModel {
       // Keep trying to load until we find components, regardless of detection flags
       if (!this.allAureliaObjects?.length) {
         this.loadAllComponents();
+      } else {
+        // Check for tree changes and reload if changed
+        this.debugHost.checkComponentTreeChanges().then((hasChanged) => {
+          if (hasChanged) {
+            this.loadAllComponents();
+          }
+        });
       }
       this.refreshExternalPanels();
     }, 2000);
@@ -157,8 +183,10 @@ export class App implements ICustomElementViewModel {
   // Tab management methods
   switchTab(tabId: string) {
     this.activeTab = tabId;
-    if (this.isCoreTab(tabId)) {
+    if (this.isComponentTab(tabId)) {
       this.loadAllComponents();
+    } else if (tabId === 'interactions') {
+      this.loadInteractionLog(true);
     } else {
       this.refreshExternalPanels(true);
       this.notifyExternalSelection();
@@ -217,6 +245,10 @@ export class App implements ICustomElementViewModel {
   }
 
   private isCoreTab(tabId: string): tabId is CoreTabId {
+    return tabId === 'all' || tabId === 'components' || tabId === 'attributes' || tabId === 'interactions';
+  }
+
+  private isComponentTab(tabId: string): tabId is ComponentTabId {
     return tabId === 'all' || tabId === 'components' || tabId === 'attributes';
   }
 
@@ -370,6 +402,144 @@ export class App implements ICustomElementViewModel {
     });
   }
 
+  // Interaction timeline
+  async loadInteractionLog(force = false, silent = false): Promise<void> {
+    if (this.interactionLoading && !force && !silent) return;
+
+    const previousSignature = this.interactionSignature;
+    if (!silent) {
+      this.interactionLoading = true;
+      this.interactionError = null;
+    }
+    try {
+      const log = await this.debugHost.getInteractionLog();
+      const sorted = Array.isArray(log)
+        ? [...log].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        : [];
+      const signature = sorted.map((e) => `${e.id}:${e.timestamp}`).join('|');
+      this.interactionSignature = signature;
+      if (signature !== previousSignature) {
+        this.interactionLog = sorted;
+      }
+    } catch (error) {
+      if (!silent) {
+        this.interactionError = (error as any)?.message || String(error);
+        this.interactionLog = [];
+      }
+    } finally {
+      if (!silent) {
+        this.interactionLoading = false;
+      }
+    }
+  }
+
+  async replayInteraction(id: string): Promise<void> {
+    if (!id) return;
+    try {
+      await this.debugHost.replayInteraction(id);
+    } catch (error) {
+      console.warn('Replay failed', error);
+    }
+  }
+
+  async applyInteractionSnapshot(id: string, phase: InteractionPhase): Promise<void> {
+    if (!id) return;
+    try {
+      await this.debugHost.applyInteractionSnapshot(id, phase);
+    } catch (error) {
+      console.warn('Apply snapshot failed', error);
+    }
+  }
+
+  async clearInteractionLog(): Promise<void> {
+    // Optimistically clear local log for immediate UI feedback
+    this.interactionLog = [];
+    this.interactionSignature = '';
+    this.interactionError = null;
+
+    try {
+      await this.debugHost.clearInteractionLog();
+    } catch (error) {
+      console.warn('Clear interaction log failed', error);
+    }
+  }
+
+  get hasInteractions(): boolean {
+    return Array.isArray(this.interactionLog) && this.interactionLog.length > 0;
+  }
+
+  get formattedInteractionLog(): EventInteractionRecord[] {
+    return this.interactionLog || [];
+  }
+
+  private registerInteractionStream() {
+    if (!(chrome?.runtime?.onMessage?.addListener)) return;
+    this.runtimeInteractionListener = (message: any) => {
+      if (message && message.type === 'au-devtools:interaction' && message.entry) {
+        this.handleIncomingInteraction(message.entry as EventInteractionRecord);
+      }
+    };
+    chrome.runtime.onMessage.addListener(this.runtimeInteractionListener);
+  }
+
+  private handleIncomingInteraction(entry: EventInteractionRecord) {
+    if (!entry || !entry.id) return;
+    const existing = this.interactionLog.find((e) => e.id === entry.id);
+    if (existing) return;
+    const next = [entry, ...(this.interactionLog || [])];
+    next.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    this.interactionLog = next;
+    this.interactionSignature = next.map((e) => `${e.id}:${e.timestamp}`).join('|');
+  }
+
+  private registerPropertyChangeStream() {
+    if (!(chrome?.runtime?.onMessage?.addListener)) return;
+    this.propertyChangeListener = (message: any) => {
+      if (message && message.type === 'au-devtools:property-change') {
+        this.onPropertyChanges(message.changes, message.snapshot);
+      }
+    };
+    chrome.runtime.onMessage.addListener(this.propertyChangeListener);
+  }
+
+  private registerTreeChangeStream() {
+    if (!(chrome?.runtime?.onMessage?.addListener)) return;
+    this.treeChangeListener = (message: any) => {
+      if (message && message.type === 'au-devtools:tree-change') {
+        this.loadAllComponents();
+      }
+    };
+    chrome.runtime.onMessage.addListener(this.treeChangeListener);
+  }
+
+  onPropertyChanges(changes: PropertyChangeRecord[], snapshot: PropertySnapshot) {
+    if (!changes || !changes.length || !this.selectedElement) return;
+
+    const selectedKey = this.selectedElement.key || this.selectedElement.name;
+    if (!selectedKey || snapshot?.componentKey !== selectedKey) return;
+
+    let hasUpdates = false;
+
+    for (const change of changes) {
+      const bindable = this.selectedElement.bindables?.find((b) => b.name === change.propertyName);
+      if (bindable) {
+        bindable.value = change.newValue;
+        hasUpdates = true;
+        continue;
+      }
+
+      const property = this.selectedElement.properties?.find((p) => p.name === change.propertyName);
+      if (property) {
+        property.value = change.newValue;
+        hasUpdates = true;
+      }
+    }
+
+    if (hasUpdates) {
+      this.refreshPropertyBindings();
+    }
+  }
+
   // User-triggered refresh with spinner animation
   refreshComponents() {
     if (this.isRefreshing) return;
@@ -401,6 +571,7 @@ export class App implements ICustomElementViewModel {
       if (existingNode) {
         this.applySelectionFromNode(existingNode);
       } else {
+        this.debugHost.stopPropertyWatching();
         this.selectedComponentId = undefined;
         this.selectedElement = undefined;
         this.selectedElementAttributes = undefined;
@@ -570,14 +741,14 @@ export class App implements ICustomElementViewModel {
   }
 
   get filteredComponentTreeByTab(): ComponentNode[] {
-    if (!this.isCoreTab(this.activeTab)) {
+    if (!this.isComponentTab(this.activeTab)) {
       return [];
     }
 
     // First apply tab filtering to the full tree
     let tabFilteredTree: ComponentNode[];
 
-    switch (this.activeTab as CoreTabId) {
+    switch (this.activeTab as ComponentTabId) {
       case 'components':
         tabFilteredTree = this.filterTreeByType(this.componentTree, 'custom-element');
         break;
@@ -759,6 +930,12 @@ export class App implements ICustomElementViewModel {
       this.selectedBreadcrumb = [node];
     }
 
+    // Start watching the selected component for property changes
+    const componentKey = this.selectedElement?.key || this.selectedElement?.name;
+    if (componentKey) {
+      this.debugHost.startPropertyWatching({ componentKey, pollInterval: 500 });
+    }
+
     if (this.isExternalTabActive) {
       this.scheduleExternalPanelRefresh();
     }
@@ -845,21 +1022,23 @@ export class App implements ICustomElementViewModel {
     query: string
   ): ComponentNode[] {
     const filtered: ComponentNode[] = [];
+    const queryVariants = getNamingVariants(query);
 
     for (const node of nodes) {
+      const nodeVariants = getNamingVariants(node.name);
       const matchesSearch =
-        node.name.toLowerCase().includes(query) ||
+        nodeVariants.some((variant) =>
+          queryVariants.some((q) => variant.includes(q))
+        ) ||
         node.type.toLowerCase().includes(query);
 
-      // Filter children recursively
       const filteredChildren = this.filterComponentTree(node.children, query);
 
-      // Include node if it matches or has matching children
       if (matchesSearch || filteredChildren.length > 0) {
         const filteredNode: ComponentNode = {
           ...node,
           children: filteredChildren,
-          expanded: filteredChildren.length > 0 || node.expanded, // Auto-expand if has matching children
+          expanded: filteredChildren.length > 0 || node.expanded,
         };
         filtered.push(filteredNode);
       }
@@ -1395,7 +1574,8 @@ interface ComponentDisplayNode {
   depth: number;
 }
 
-type CoreTabId = 'all' | 'components' | 'attributes';
+type ComponentTabId = 'all' | 'components' | 'attributes';
+type CoreTabId = ComponentTabId | 'interactions';
 
 interface DevtoolsTabDefinition {
   id: string;
@@ -1411,4 +1591,32 @@ export class StringifyValueConverter implements ValueConverterInstance {
   toView(value: unknown) {
     return JSON.stringify(value);
   }
+}
+
+function toKebabCase(str: string): string {
+  return str
+    .replace(/([a-z])([A-Z])/g, '$1-$2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase();
+}
+
+function toPascalCase(str: string): string {
+  return str
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join('');
+}
+
+function toCamelCase(str: string): string {
+  const pascal = toPascalCase(str);
+  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
+}
+
+function getNamingVariants(name: string): string[] {
+  const lower = name.toLowerCase();
+  const kebab = toKebabCase(name);
+  const pascal = toPascalCase(kebab);
+  const camel = toCamelCase(kebab);
+  const variants = new Set([lower, kebab.toLowerCase(), pascal.toLowerCase(), camel.toLowerCase()]);
+  return [...variants];
 }

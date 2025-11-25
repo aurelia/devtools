@@ -62,3 +62,40 @@ export function getAureliaV1Instance(): any | undefined {
 (window as any).getAureliaInstance = getAureliaInstance;
 (window as any).getAureliaV1Instance = getAureliaV1Instance;
 (window as any).getAureliaV2Instance = getAureliaV2Instance;
+
+// Forward interaction events from the injected hook to the extension
+try {
+  window.addEventListener('aurelia-devtools:interaction', (event: any) => {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'au-devtools:interaction',
+        entry: event?.detail,
+      });
+    } catch {}
+  });
+} catch {}
+
+// Forward property change events from the injected hook to the extension
+try {
+  window.addEventListener('aurelia-devtools:property-change', (event: any) => {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'au-devtools:property-change',
+        changes: event?.detail?.changes,
+        snapshot: event?.detail?.snapshot,
+      });
+    } catch {}
+  });
+} catch {}
+
+// Forward component tree change events
+try {
+  window.addEventListener('aurelia-devtools:tree-change', (event: any) => {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'au-devtools:tree-change',
+        detail: event?.detail,
+      });
+    } catch {}
+  });
+} catch {}

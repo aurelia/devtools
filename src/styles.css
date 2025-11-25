@@ -505,21 +505,31 @@
     @apply text-xs flex-1 min-w-0;
     font-family: var(--font-family-mono);
   }
-  
+
   .component-name.custom-element {
     @apply text-blue-600 font-medium;
+    text-decoration: underline;
+    text-decoration-style: dashed;
+    text-decoration-color: rgba(37, 99, 235, 0.5);
+    text-underline-offset: 3px;
   }
-  
+
   .component-name.custom-attribute {
     @apply text-red-600 italic;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: rgba(220, 38, 38, 0.5);
+    text-underline-offset: 3px;
   }
-  
+
   .dark .component-name.custom-element {
     @apply text-blue-400;
+    text-decoration-color: rgba(96, 165, 250, 0.5);
   }
-  
+
   .dark .component-name.custom-attribute {
     @apply text-red-400;
+    text-decoration-color: rgba(248, 113, 113, 0.5);
   }
   
   .component-badge {
@@ -765,9 +775,50 @@
     @apply italic;
   }
 
+  .property-value.binding {
+    color: var(--color-syntax-object);
+    @apply italic;
+  }
+
   .property-value.function {
     color: var(--color-syntax-boolean);
     @apply font-medium italic;
+  }
+
+  .property-expression {
+    @apply inline-flex items-center ml-2 text-gray-500 text-[11px] gap-1;
+    font-family: var(--font-family-mono);
+    opacity: 0.85;
+  }
+
+  .dark .property-expression {
+    @apply text-gray-400;
+  }
+
+  .expression-label {
+    @apply text-gray-400 text-[10px] font-normal;
+    font-family: var(--font-family-sans);
+  }
+
+  .dark .expression-label {
+    @apply text-gray-500;
+  }
+
+  .expression-code {
+    @apply px-1 py-0.5 rounded text-[11px];
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--color-syntax-property);
+    font-family: var(--font-family-mono);
+    word-break: break-all;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dark .expression-code {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--color-dark-syntax-property);
   }
 
   .expand-button {
@@ -822,6 +873,10 @@
   .dark .property-value.object,
   .dark .property-value.array,
   .dark .property-value.node {
+    color: var(--color-dark-syntax-object);
+  }
+
+  .dark .property-value.binding {
     color: var(--color-dark-syntax-object);
   }
 
@@ -1375,5 +1430,86 @@
     max-height: 320px;
     overflow: auto;
     font-size: 12px;
+  }
+
+  /* Interaction timeline */
+  .interaction-panel {
+    @apply h-full flex flex-col gap-3 p-4 overflow-hidden;
+  }
+
+  .interaction-header {
+    @apply flex items-start justify-between gap-3;
+  }
+
+  .interaction-header-left {
+    @apply flex flex-col gap-1 min-w-0;
+  }
+
+  .interaction-title {
+    @apply text-sm font-semibold;
+  }
+
+  .interaction-subtitle {
+    @apply text-xs text-gray-600 dark:text-gray-400 mt-0.5 max-w-2xl;
+  }
+
+  .interaction-actions {
+    @apply flex items-center gap-2;
+  }
+
+  .interaction-list {
+    @apply flex-1 overflow-y-auto flex flex-col gap-2;
+  }
+
+  .interaction-row {
+    @apply border border-gray-200 dark:border-gray-700 rounded px-3 py-2 flex justify-between gap-3 bg-white dark:bg-gray-900 shadow-sm;
+  }
+
+  .interaction-meta {
+    @apply flex-1 min-w-0;
+  }
+
+  .interaction-event {
+    @apply flex items-center gap-2 text-sm font-medium;
+  }
+
+  .interaction-event-name {
+    @apply text-gray-900 dark:text-gray-100;
+  }
+
+  .interaction-mode {
+    @apply text-[10px] uppercase tracking-wide px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300;
+  }
+
+  .interaction-duration {
+    @apply text-xs text-gray-500;
+  }
+
+  .interaction-context {
+    @apply text-xs text-gray-600 dark:text-gray-400 mt-0.5 flex flex-wrap gap-1;
+  }
+
+  .interaction-path {
+    @apply text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate;
+  }
+
+  .interaction-router {
+    @apply text-xs text-blue-700 dark:text-blue-300 mt-0.5 flex flex-wrap gap-1;
+  }
+
+  .interaction-error {
+    @apply text-xs text-red-600 dark:text-red-400 mt-0.5;
+  }
+
+  .interaction-commands {
+    @apply flex flex-col gap-1 flex-shrink-0;
+  }
+
+  .interaction-empty {
+    @apply border border-dashed border-gray-300 dark:border-gray-700 rounded p-6 text-center text-sm text-gray-600 dark:text-gray-400 flex flex-col items-center gap-2;
+  }
+
+  .interaction-empty--error {
+    @apply border-red-300 dark:border-red-600 text-red-700 dark:text-red-300;
   }
 }

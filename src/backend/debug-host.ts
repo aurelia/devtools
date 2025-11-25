@@ -1,4 +1,4 @@
-import { AureliaComponentSnapshot, AureliaInfo, ExternalPanelSnapshot, IControllerInfo, Property } from '../shared/types';
+import { AureliaComponentSnapshot, AureliaInfo, EventInteractionRecord, ExternalPanelSnapshot, IControllerInfo, InteractionPhase, Property, PropertyChangeRecord, PropertySnapshot, WatchOptions } from '../shared/types';
 import { App } from './../app';
 import { ICustomElementViewModel } from 'aurelia';
 
@@ -11,6 +11,10 @@ export class SelectionChanged {
 export class DebugHost implements ICustomElementViewModel {
   consumer: App;
   private pickerPollingInterval: number | null = null;
+  private propertyWatchInterval: number | null = null;
+  private lastPropertySnapshot: PropertySnapshot | null = null;
+  private watchingComponentKey: string | null = null;
+  private componentTreeSignature: string = '';
 
   attach(consumer: App) {
     this.consumer = consumer;
@@ -354,6 +358,119 @@ export class DebugHost implements ICustomElementViewModel {
     });
   }
 
+  getInteractionLog(): Promise<EventInteractionRecord[]> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve([]);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || typeof hook.getInteractionLog !== 'function') {
+              return [];
+            }
+            const log = hook.getInteractionLog();
+            return Array.isArray(log) ? log : [];
+          } catch (error) {
+            return [];
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: EventInteractionRecord[]) => {
+        if (!Array.isArray(result)) {
+          resolve([]);
+          return;
+        }
+        resolve(result);
+      });
+    });
+  }
+
+  replayInteraction(interactionId: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(false);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || typeof hook.replayInteraction !== 'function') {
+            return false;
+          }
+          try {
+            return hook.replayInteraction(${JSON.stringify(interactionId)});
+          } catch (error) {
+            return false;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: boolean) => {
+        resolve(Boolean(result));
+      });
+    });
+  }
+
+  applyInteractionSnapshot(interactionId: string, phase: InteractionPhase): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(false);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || typeof hook.applyInteractionSnapshot !== 'function') {
+            return false;
+          }
+          try {
+            return hook.applyInteractionSnapshot(${JSON.stringify(interactionId)}, ${JSON.stringify(phase)});
+          } catch (error) {
+            return false;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: boolean) => {
+        resolve(Boolean(result));
+      });
+    });
+  }
+
+  clearInteractionLog(): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(false);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || typeof hook.clearInteractionLog !== 'function') {
+            return false;
+          }
+          try {
+            return hook.clearInteractionLog();
+          } catch (error) {
+            return false;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: boolean) => {
+        resolve(Boolean(result));
+      });
+    });
+  }
+
   // Component highlighting functionality
   highlightComponent(componentInfo: any) {
     if (chrome && chrome.devtools) {
@@ -667,5 +784,240 @@ export class DebugHost implements ICustomElementViewModel {
       })();`;
       chrome.devtools.inspectedWindow.eval(code);
     }
+  }
+
+  startPropertyWatching(options: WatchOptions) {
+    this.stopPropertyWatching();
+
+    this.watchingComponentKey = options.componentKey;
+    const interval = options.pollInterval || 500;
+
+    this.getPropertySnapshot(options.componentKey).then((snapshot) => {
+      this.lastPropertySnapshot = snapshot;
+    });
+
+    this.propertyWatchInterval = setInterval(() => {
+      this.checkForPropertyChanges();
+    }, interval) as any;
+  }
+
+  stopPropertyWatching() {
+    if (this.propertyWatchInterval) {
+      clearInterval(this.propertyWatchInterval);
+      this.propertyWatchInterval = null;
+    }
+    this.watchingComponentKey = null;
+    this.lastPropertySnapshot = null;
+  }
+
+  private checkForPropertyChanges() {
+    if (!this.watchingComponentKey) return;
+
+    this.getPropertySnapshot(this.watchingComponentKey).then((snapshot) => {
+      if (!snapshot || !this.lastPropertySnapshot) {
+        this.lastPropertySnapshot = snapshot;
+        return;
+      }
+
+      const changes = this.diffPropertySnapshots(this.lastPropertySnapshot, snapshot);
+
+      if (changes.length > 0) {
+        this.lastPropertySnapshot = snapshot;
+        if (this.consumer && typeof this.consumer.onPropertyChanges === 'function') {
+          this.consumer.onPropertyChanges(changes, snapshot);
+        }
+      }
+    });
+  }
+
+  private diffPropertySnapshots(
+    oldSnapshot: PropertySnapshot,
+    newSnapshot: PropertySnapshot
+  ): PropertyChangeRecord[] {
+    const changes: PropertyChangeRecord[] = [];
+
+    const compareProperties = (
+      oldProps: Array<{ name: string; value: unknown; type: string }>,
+      newProps: Array<{ name: string; value: unknown; type: string }>,
+      propertyType: 'bindable' | 'property'
+    ) => {
+      const oldMap = new Map(oldProps.map((p) => [p.name, p]));
+      const newMap = new Map(newProps.map((p) => [p.name, p]));
+
+      for (const [name, newProp] of newMap) {
+        const oldProp = oldMap.get(name);
+        if (!oldProp) {
+          changes.push({
+            componentKey: newSnapshot.componentKey,
+            propertyName: name,
+            propertyType,
+            oldValue: undefined,
+            newValue: newProp.value,
+            timestamp: newSnapshot.timestamp,
+          });
+        } else if (!this.valuesEqual(oldProp.value, newProp.value)) {
+          changes.push({
+            componentKey: newSnapshot.componentKey,
+            propertyName: name,
+            propertyType,
+            oldValue: oldProp.value,
+            newValue: newProp.value,
+            timestamp: newSnapshot.timestamp,
+          });
+        }
+      }
+    };
+
+    compareProperties(oldSnapshot.bindables, newSnapshot.bindables, 'bindable');
+    compareProperties(oldSnapshot.properties, newSnapshot.properties, 'property');
+
+    return changes;
+  }
+
+  private valuesEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (typeof a !== typeof b) return false;
+    if (a === null || b === null) return a === b;
+    if (typeof a === 'object') {
+      try {
+        return JSON.stringify(a) === JSON.stringify(b);
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  getPropertySnapshot(componentKey: string): Promise<PropertySnapshot | null> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(null);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || !hook.getComponentByKey) {
+              return null;
+            }
+            const info = hook.getComponentByKey(${JSON.stringify(componentKey)});
+            if (!info) {
+              return null;
+            }
+            const serializeValue = (val) => {
+              if (val === null) return { value: null, type: 'null' };
+              if (val === undefined) return { value: undefined, type: 'undefined' };
+              const t = typeof val;
+              if (t === 'function') return { value: '[Function]', type: 'function' };
+              if (t === 'object') {
+                try {
+                  return { value: JSON.parse(JSON.stringify(val)), type: Array.isArray(val) ? 'array' : 'object' };
+                } catch {
+                  return { value: '[Object]', type: 'object' };
+                }
+              }
+              return { value: val, type: t };
+            };
+            const bindables = (info.bindables || []).map(b => ({
+              name: b.name,
+              ...serializeValue(b.value)
+            }));
+            const properties = (info.properties || []).map(p => ({
+              name: p.name,
+              ...serializeValue(p.value)
+            }));
+            return {
+              componentKey: ${JSON.stringify(componentKey)},
+              bindables,
+              properties,
+              timestamp: Date.now()
+            };
+          } catch (e) {
+            return null;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: PropertySnapshot | null) => {
+        resolve(result);
+      });
+    });
+  }
+
+  refreshSelectedComponent(): Promise<IControllerInfo | null> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools) || !this.watchingComponentKey) {
+        resolve(null);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || !hook.getComponentByKey) {
+              return null;
+            }
+            return hook.getComponentByKey(${JSON.stringify(this.watchingComponentKey)});
+          } catch (e) {
+            return null;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: IControllerInfo | null) => {
+        resolve(result);
+      });
+    });
+  }
+
+  checkComponentTreeChanges(): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(false);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook) return '';
+
+            const getSignature = (nodes) => {
+              if (!nodes || !nodes.length) return '';
+              return nodes.map(n => {
+                const key = n.customElementInfo?.key || n.customElementInfo?.name || n.id || '';
+                const attrKeys = (n.customAttributesInfo || []).map(a => a?.key || a?.name || '').join(',');
+                const childSig = n.children ? getSignature(n.children) : '';
+                return key + ':' + attrKeys + '(' + childSig + ')';
+              }).join('|');
+            };
+
+            if (hook.getComponentTree) {
+              const tree = hook.getComponentTree() || [];
+              return getSignature(tree);
+            }
+
+            if (hook.getAllInfo) {
+              const flat = hook.getAllInfo() || [];
+              return flat.map(c => (c.customElementInfo?.key || c.customElementInfo?.name || '')).join('|');
+            }
+
+            return '';
+          } catch (e) {
+            return '';
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (signature: string) => {
+        const hasChanged = signature !== this.componentTreeSignature;
+        this.componentTreeSignature = signature;
+        resolve(hasChanged);
+      });
+    });
   }
 }

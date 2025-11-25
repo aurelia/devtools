@@ -417,4 +417,175 @@ describe('App core logic', () => {
       expect(debugHost.unhighlightComponent).toHaveBeenCalled();
     });
   });
+
+  describe('property watching and reactivity', () => {
+    function rawNode(
+      id: string,
+      element: IControllerInfo | null,
+      attrs: IControllerInfo[] = [],
+      children: AureliaComponentTreeNode[] = [],
+      domPath: string = ''
+    ): AureliaComponentTreeNode {
+      return {
+        id,
+        domPath,
+        tagName: element?.name ?? null,
+        customElementInfo: element,
+        customAttributesInfo: attrs,
+        children,
+      };
+    }
+
+    function applyTree(nodes: AureliaComponentTreeNode[]) {
+      (app as any).handleComponentSnapshot({ tree: nodes, flat: [] });
+      return (app as any).componentTree as any[];
+    }
+
+    it('selectComponent starts property watching with component key', () => {
+      const tree = applyTree([rawNode('alpha', ci('alpha', 'alpha-key'))]);
+      app.selectComponent(tree[0].id);
+
+      expect(debugHost.startPropertyWatching).toHaveBeenCalledWith({
+        componentKey: 'alpha-key',
+        pollInterval: 500,
+      });
+    });
+
+    it('selectComponent falls back to name if key not available', () => {
+      const element = ci('my-element');
+      delete (element as any).key;
+      const tree = applyTree([rawNode('beta', element)]);
+
+      app.selectComponent(tree[0].id);
+
+      expect(debugHost.startPropertyWatching).toHaveBeenCalledWith({
+        componentKey: 'my-element',
+        pollInterval: 500,
+      });
+    });
+
+    it('handleComponentSnapshot stops property watching when selected node is removed', () => {
+      const tree = applyTree([rawNode('alpha', ci('alpha'))]);
+      app.selectComponent(tree[0].id);
+
+      // Clear the component tree so selected component no longer exists
+      (app as any).handleComponentSnapshot({ tree: [], flat: [] });
+
+      expect(debugHost.stopPropertyWatching).toHaveBeenCalled();
+      expect(app.selectedComponentId).toBeUndefined();
+    });
+
+    it('onPropertyChanges updates bindable values', () => {
+      const bindable: any = { name: 'count', value: 0, type: 'number' };
+      (app as any).selectedElement = {
+        key: 'test-key',
+        name: 'test',
+        bindables: [bindable],
+        properties: [],
+      };
+
+      const changes = [
+        {
+          componentKey: 'test-key',
+          propertyName: 'count',
+          propertyType: 'bindable',
+          oldValue: 0,
+          newValue: 5,
+          timestamp: Date.now(),
+        },
+      ];
+
+      const snapshot = {
+        componentKey: 'test-key',
+        bindables: [{ name: 'count', value: 5, type: 'number' }],
+        properties: [],
+        timestamp: Date.now(),
+      };
+
+      app.onPropertyChanges(changes as any, snapshot as any);
+
+      expect(bindable.value).toBe(5);
+    });
+
+    it('onPropertyChanges updates property values', () => {
+      const property: any = { name: 'message', value: 'old', type: 'string' };
+      (app as any).selectedElement = {
+        key: 'test-key',
+        name: 'test',
+        bindables: [],
+        properties: [property],
+      };
+
+      const changes = [
+        {
+          componentKey: 'test-key',
+          propertyName: 'message',
+          propertyType: 'property',
+          oldValue: 'old',
+          newValue: 'new',
+          timestamp: Date.now(),
+        },
+      ];
+
+      const snapshot = {
+        componentKey: 'test-key',
+        bindables: [],
+        properties: [{ name: 'message', value: 'new', type: 'string' }],
+        timestamp: Date.now(),
+      };
+
+      app.onPropertyChanges(changes as any, snapshot as any);
+
+      expect(property.value).toBe('new');
+    });
+
+    it('onPropertyChanges ignores changes for different component', () => {
+      const property: any = { name: 'message', value: 'original', type: 'string' };
+      (app as any).selectedElement = {
+        key: 'selected-key',
+        name: 'selected',
+        bindables: [],
+        properties: [property],
+      };
+
+      const changes = [
+        {
+          componentKey: 'different-key',
+          propertyName: 'message',
+          propertyType: 'property',
+          oldValue: 'old',
+          newValue: 'new',
+          timestamp: Date.now(),
+        },
+      ];
+
+      const snapshot = {
+        componentKey: 'different-key',
+        bindables: [],
+        properties: [{ name: 'message', value: 'new', type: 'string' }],
+        timestamp: Date.now(),
+      };
+
+      app.onPropertyChanges(changes as any, snapshot as any);
+
+      expect(property.value).toBe('original');
+    });
+
+    it('onPropertyChanges does nothing when no selected element', () => {
+      (app as any).selectedElement = undefined;
+
+      const changes = [
+        {
+          componentKey: 'any-key',
+          propertyName: 'prop',
+          propertyType: 'property',
+          oldValue: 'old',
+          newValue: 'new',
+          timestamp: Date.now(),
+        },
+      ];
+
+      expect(() => app.onPropertyChanges(changes as any, {} as any)).not.toThrow();
+    });
+  });
 });

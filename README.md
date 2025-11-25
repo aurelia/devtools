@@ -25,6 +25,11 @@ A browser extension for debugging Aurelia 1 and 2 applications. Features a top-l
  - **Elements Sidebar Integration**: Optional Aurelia sidebar in the Elements panel showing the selected node's Aurelia info
  - **Selection Sync**: Toggle to auto-sync the Aurelia panel selection with the Elements panel ($0). Includes a "Reveal in Elements" action
 
+### Binding expressions (Aurelia 1 & 2)
+- Every bindable/property row now shows an `expr: ...` badge when the value comes from a binding; this works for both Aurelia 1 and 2.
+- In the Inspector > Controller section you’ll see `bindings` (and `instructions` for v1) collections. Expand an item to inspect the binding record, including the original expression and, for member access, the resolved object so you can drill further.
+- If you don’t see expressions, expand the selected component’s `Controller` > `bindings` entry; each binding/instruction item carries the expression even when the property is a computed object.
+
 ## Opting Out Of DevTools
 
 If you need to prevent the Aurelia DevTools from inspecting your application (v1 or v2), set any of the following **before** Aurelia bootstraps:

@@ -91,14 +91,59 @@ function createElementsSidebar() {
         const expr = `(() => {
           try {
             const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
-            if (!hook || !hook.getCustomElementInfo) {
+            if (!hook) {
               return { status: 'no-hook', message: 'Aurelia DevTools hook not available' };
             }
-            const info = hook.getCustomElementInfo($0, true);
-            if (!info || (!info.customElementInfo && (!info.customAttributesInfo || !info.customAttributesInfo.length))) {
-              return { status: 'no-selection', message: 'Selected node is not an Aurelia component/attribute' };
+
+            const result = {
+              status: 'ok',
+              selectedNode: {
+                nodeType: $0 ? $0.nodeType : null,
+                nodeName: $0 ? $0.nodeName : null,
+              },
+            };
+
+            // Get binding info for the selected node (works for text nodes too)
+            if (hook.getNodeBindingInfo) {
+              const bindingInfo = hook.getNodeBindingInfo($0);
+              if (bindingInfo) {
+                if (bindingInfo.interpolations && bindingInfo.interpolations.length) {
+                  result.interpolations = bindingInfo.interpolations.map(i => i.expression);
+                }
+                if (bindingInfo.bindings && bindingInfo.bindings.length) {
+                  result.bindings = bindingInfo.bindings.map(b => ({
+                    expression: b.expression,
+                    target: b.targetProperty,
+                    mode: b.mode,
+                  }));
+                }
+                if (bindingInfo.nearestComponent) {
+                  result.nearestComponent = bindingInfo.nearestComponent.name;
+                }
+              }
             }
-            return { status: 'ok', ...info };
+
+            // Get component info if available
+            if (hook.getCustomElementInfo) {
+              const info = hook.getCustomElementInfo($0, true);
+              if (info && (info.customElementInfo || (info.customAttributesInfo && info.customAttributesInfo.length))) {
+                if (info.customElementInfo) {
+                  result.component = info.customElementInfo.name;
+                  result.componentBindables = (info.customElementInfo.bindables || []).map(b => b.name + ': ' + b.value);
+                }
+                if (info.customAttributesInfo && info.customAttributesInfo.length) {
+                  result.customAttributes = info.customAttributesInfo.map(a => a.name);
+                }
+              }
+            }
+
+            // Check if we have any useful info
+            const hasInfo = result.interpolations || result.bindings || result.component || result.customAttributes;
+            if (!hasInfo) {
+              return { status: 'no-aurelia', message: 'No Aurelia bindings found for this node' };
+            }
+
+            return result;
           } catch (e) { return { status: 'error', message: String(e && e.message || e) }; }
         })()`;
         try {
@@ -232,6 +277,12 @@ function install(debugValueLookup) {
       : "__au_devtools_map_entry__";
   const externalPanels = new Map();
   let externalPanelsVersion = 0;
+  const interactionLog = [];
+  let interactionSequence = 0;
+  const MAX_INTERACTION_LOG = 200;
+  installEventProxy();
+  installNavigationListeners();
+  installRouterEventTap();
   registerExternalPanelBridge();
 
   const hooks = {
@@ -243,6 +294,10 @@ function install(debugValueLookup) {
       panels: Array.from(externalPanels.values()),
     }),
     emitDevtoolsEvent: (eventName, payload) => emitDevtoolsEvent(eventName, payload),
+    getInteractionLog: () => getInteractionLog(),
+    replayInteraction: (id) => replayInteraction(id),
+    applyInteractionSnapshot: (id, phase) => applyInteractionSnapshot(id, phase),
+    clearInteractionLog: () => clearInteractionLog(),
     getAllInfo: (root) => {
       root = root ?? document.body;
       return [
@@ -428,6 +483,95 @@ function install(debugValueLookup) {
       return convertObjectToDebugInfo(value);
     },
 
+    getNodeBindingInfo(node) {
+      if (!node) return null;
+
+      try {
+        const result = {
+          nodeType: node.nodeType,
+          nodeName: node.nodeName,
+          bindings: [],
+          interpolations: [],
+          nearestComponent: null,
+        };
+
+        // Find nearest Aurelia controller by walking up the DOM
+        let element = node.nodeType === 3 ? node.parentElement : node;
+        let controller = null;
+        let view = null;
+
+        while (element && !controller) {
+          // Check Aurelia v2
+          const auV2 = element['$au'];
+          if (auV2) {
+            const ce = auV2['au:resource:custom-element'];
+            if (ce) {
+              controller = ce;
+              view = ce.view || ce.viewModel?.view || ce.viewModel?.$view;
+              result.nearestComponent = {
+                name: ce.definition?.name || element.tagName?.toLowerCase(),
+                type: 'custom-element',
+                version: 2,
+              };
+              break;
+            }
+          }
+
+          // Check Aurelia v1
+          const auV1 = element.au;
+          if (auV1 && auV1.controller) {
+            controller = auV1.controller;
+            view = controller.view;
+            result.nearestComponent = {
+              name: controller.behavior?.elementName || controller.behavior?.attributeName || element.tagName?.toLowerCase(),
+              type: 'custom-element',
+              version: 1,
+            };
+            break;
+          }
+
+          element = element.parentElement;
+        }
+
+        if (!view || !view.bindings) return result;
+
+        // Find bindings that target this node
+        for (const binding of view.bindings) {
+          if (!binding) continue;
+
+          const bindingTarget = binding.target || binding.targetNode;
+          const isTargetMatch = bindingTarget === node ||
+            (node.nodeType === 3 && bindingTarget === node.parentElement) ||
+            (bindingTarget && bindingTarget.contains && bindingTarget.contains(node));
+
+          if (!isTargetMatch) continue;
+
+          const ast = binding.ast || binding.sourceExpression || binding.expression;
+          if (!ast) continue;
+
+          const kind = ast.$kind || ast.kind || ast.type || (ast.constructor && ast.constructor.name);
+          const expr = unparseExpression(ast);
+
+          if (kind === 'Interpolation') {
+            result.interpolations.push({
+              expression: expr,
+              targetProperty: binding.targetProperty || 'textContent',
+            });
+          } else {
+            result.bindings.push({
+              expression: expr,
+              targetProperty: binding.targetProperty || binding.targetEvent || 'value',
+              mode: binding.mode || (binding.updateSource ? 'two-way' : 'to-view'),
+            });
+          }
+        }
+
+        return result;
+      } catch (e) {
+        return { error: e.message };
+      }
+    },
+
     findElementByComponentInfo(componentInfo) {
       // Find DOM element that corresponds to the component info
       const allElements = document.querySelectorAll("*");
@@ -508,6 +652,731 @@ function install(debugValueLookup) {
       return null;
     },
   };
+
+  function installEventProxy() {
+    try {
+      tryPatchListenerBindingPrototype();
+      tryPatchAureliaV1Listener();
+      patchAddEventListener();
+    } catch {}
+  }
+
+  function tryPatchListenerBindingPrototype() {
+    const candidates = [
+      globalThis && globalThis.ListenerBinding,
+      globalThis && globalThis.au && globalThis.au.ListenerBinding,
+      globalThis && globalThis.Aurelia && globalThis.Aurelia.ListenerBinding,
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate && candidate.prototype && !candidate.prototype.__auDevtoolsPatched) {
+        const proto = candidate.prototype;
+        const originalHandleEvent = proto.handleEvent;
+        if (typeof originalHandleEvent !== 'function') {
+          continue;
+        }
+        proto.__auDevtoolsPatched = true;
+        proto.handleEvent = function(event) {
+          return recordInteraction(this, event, originalHandleEvent);
+        };
+        break;
+      }
+    }
+  }
+
+  function tryPatchAureliaV1Listener() {
+    let v1Patched = false;
+
+    const patchCallSource = (proto) => {
+      if (!proto || proto.__auDevtoolsV1Patched) return false;
+      const originalCallSource = proto.callSource;
+      if (typeof originalCallSource !== 'function') return false;
+      proto.__auDevtoolsV1Patched = true;
+      proto.callSource = function(event) {
+        if (this.__auDevtoolsRecording) {
+          return originalCallSource.call(this, event);
+        }
+        this.__auDevtoolsRecording = true;
+        try {
+          return recordInteraction(this, event, originalCallSource);
+        } catch (err) {
+          return originalCallSource.call(this, event);
+        } finally {
+          this.__auDevtoolsRecording = false;
+        }
+      };
+      return true;
+    };
+
+    const findListenerFromElement = () => {
+      const elements = document.querySelectorAll('*');
+      for (const el of elements) {
+        const au = el.au;
+        if (!au) continue;
+
+        const controller = au.controller;
+        if (controller && controller.view && Array.isArray(controller.view.bindings)) {
+          for (const binding of controller.view.bindings) {
+            if (binding && binding.sourceExpression && typeof binding.callSource === 'function') {
+              return binding.constructor;
+            }
+          }
+        }
+
+        for (const key in au) {
+          if (key === 'controller') continue;
+          const attr = au[key];
+          if (attr && attr.view && Array.isArray(attr.view.bindings)) {
+            for (const binding of attr.view.bindings) {
+              if (binding && binding.sourceExpression && typeof binding.callSource === 'function') {
+                return binding.constructor;
+              }
+            }
+          }
+        }
+      }
+      return null;
+    };
+
+    const attemptPatch = () => {
+      if (v1Patched) return true;
+      const ListenerClass = findListenerFromElement();
+      if (ListenerClass && ListenerClass.prototype) {
+        v1Patched = patchCallSource(ListenerClass.prototype);
+      }
+      return v1Patched;
+    };
+
+    if (!attemptPatch()) {
+      let attempts = 0;
+      const retryInterval = setInterval(() => {
+        attempts++;
+        if (attemptPatch() || attempts > 20) {
+          clearInterval(retryInterval);
+        }
+      }, 500);
+    }
+  }
+
+  function patchAddEventListener() {
+    const targetProto = typeof EventTarget !== 'undefined' ? EventTarget.prototype : null;
+    if (!targetProto || targetProto.__auDevtoolsPatched) {
+      return;
+    }
+    const originalAdd = targetProto.addEventListener;
+    targetProto.__auDevtoolsPatched = true;
+    targetProto.addEventListener = function(type, listener, options) {
+      maybeWrapListener(listener);
+      return originalAdd.call(this, type, listener, options);
+    };
+  }
+
+  function maybeWrapListener(listener) {
+    if (!isAureliaListener(listener) || listener.__auDevtoolsWrapped) {
+      return;
+    }
+    const originalHandleEvent = listener.handleEvent;
+    if (typeof originalHandleEvent !== 'function') {
+      return;
+    }
+    listener.__auDevtoolsWrapped = true;
+    listener.handleEvent = function(event) {
+      if (this.__auDevtoolsRecording) {
+        return originalHandleEvent.call(this, event);
+      }
+      this.__auDevtoolsRecording = true;
+      try {
+        return recordInteraction(listener, event, originalHandleEvent);
+      } finally {
+        this.__auDevtoolsRecording = false;
+      }
+    };
+  }
+
+  function isAureliaListener(listener) {
+    return !!(
+      listener &&
+      typeof listener === 'object' &&
+      typeof listener.handleEvent === 'function' &&
+      typeof listener.callSource === 'function' &&
+      typeof listener.targetEvent === 'string' &&
+      (listener.ast !== undefined || listener._scope !== undefined || listener.sourceExpression !== undefined || listener.source !== undefined)
+    );
+  }
+
+  function recordInteraction(binding, event, originalHandleEvent) {
+    const started = Date.now();
+    let vm = null;
+    let beforeSnapshot = null;
+    let error = null;
+    let result;
+
+    try {
+      vm = extractViewModel(binding);
+      beforeSnapshot = snapshotViewModel(vm);
+    } catch {}
+
+    try {
+      result = originalHandleEvent.call(binding, event);
+    } catch (err) {
+      error = err;
+      throw err;
+    } finally {
+      try {
+        const afterSnapshot = snapshotViewModel(vm);
+        const domPath = getDomPath(binding && binding.target);
+        const eventInit = extractEventInit(event);
+        const targetHint = buildTargetHint(binding, domPath);
+        const entry = {
+          id: `evt-${++interactionSequence}`,
+          eventName: (event && event.type) || (binding && binding.targetEvent) || 'unknown',
+          domPath: domPath || '',
+          timestamp: started,
+          duration: Date.now() - started,
+          mode: inferEventMode(binding),
+          vmName: vm && vm.constructor ? vm.constructor.name : undefined,
+          handlerName: inferHandlerName(binding),
+          before: beforeSnapshot,
+          after: afterSnapshot,
+          error: error ? String(error && (error.message || error)) : null,
+          replayable: !!(binding && (binding.target || domPath)),
+          canApplySnapshot: !!vm,
+          eventInit,
+          detail: eventInit && eventInit.detail ? eventInit.detail : undefined,
+          target: targetHint,
+        };
+
+        logInteraction(entry, {
+          vmRef: vm ? (typeof WeakRef === 'function' ? new WeakRef(vm) : vm) : null,
+          targetRef: binding && binding.target ? (typeof WeakRef === 'function' ? new WeakRef(binding.target) : binding.target) : null,
+          bindingRef: binding || null,
+        });
+      } catch {}
+    }
+
+    return result;
+  }
+
+  function extractViewModel(binding) {
+    if (!binding) {
+      return null;
+    }
+    const scope = binding._scope || binding.scope || null;
+    if (scope && scope.bindingContext) {
+      return scope.bindingContext;
+    }
+    if (scope && scope.overrideContext && scope.overrideContext.bindingContext) {
+      return scope.overrideContext.bindingContext;
+    }
+    if (binding.source && typeof binding.source === 'object') {
+      return binding.source;
+    }
+    return null;
+  }
+
+  function snapshotViewModel(vm) {
+    if (!vm || typeof vm !== 'object') {
+      return null;
+    }
+    const snapshot = {};
+    let propCount = 0;
+    const MAX_PROPS = 20;
+
+    try {
+      const keys = Object.keys(vm);
+      for (const key of keys) {
+        if (propCount >= MAX_PROPS) break;
+        if (key.startsWith('$') || key.startsWith('_')) continue;
+        if (key === 'router' || key === 'element' || key === 'view' || key === 'controller') continue;
+
+        try {
+          const value = vm[key];
+          if (value === undefined || value === null) {
+            snapshot[key] = value;
+            propCount++;
+            continue;
+          }
+          const type = typeof value;
+          if (type === 'function') continue;
+          if (type === 'string' || type === 'number' || type === 'boolean') {
+            snapshot[key] = value;
+            propCount++;
+            continue;
+          }
+          if (Array.isArray(value)) {
+            snapshot[key] = `[Array(${value.length})]`;
+            propCount++;
+            continue;
+          }
+          if (type === 'object') {
+            const ctorName = value.constructor?.name || 'Object';
+            snapshot[key] = `[${ctorName}]`;
+            propCount++;
+          }
+        } catch {}
+      }
+    } catch {}
+    return snapshot;
+  }
+
+  function deepCloneForSnapshot(value) {
+    if (value == null) return value;
+    if (typeof value !== 'object') return value;
+
+    if (value.__array_observer__ || value.__set_observer__ || value.__map_observer__) {
+      if (Array.isArray(value)) return `[Array(${value.length})]`;
+      return '[Observable]';
+    }
+
+    try {
+      if (typeof structuredClone === 'function') {
+        return structuredClone(value);
+      }
+    } catch {}
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {}
+    try {
+      return sanitizeForTransport(value);
+    } catch {}
+    return '[Uncloneable]';
+  }
+
+  function applySnapshot(vm, snapshot) {
+    if (!vm || !snapshot || typeof vm !== 'object') {
+      return false;
+    }
+    let applied = false;
+    Object.keys(snapshot).forEach((key) => {
+      if (typeof vm[key] === 'function') {
+        return;
+      }
+      try {
+        vm[key] = deepCloneForSnapshot(snapshot[key]);
+        applied = true;
+      } catch {}
+    });
+    return applied;
+  }
+
+  function applyInteractionSnapshot(id, phase) {
+    const entry = findInteractionEntry(id);
+    if (!entry) {
+      return false;
+    }
+    let vm = deref(entry.vmRef);
+    if (!vm) {
+      const target =
+        findElementByDomPath(entry.domPath) ||
+        findElementByTargetHint(entry.target);
+      vm = resolveViewModelFromElement(target, entry.target);
+    }
+    if (!vm) {
+      return false;
+    }
+    const snapshot = phase === 'before' ? entry.before : entry.after;
+    return applySnapshot(vm, snapshot);
+  }
+
+  function replayInteraction(id) {
+    const entry = findInteractionEntry(id);
+    if (!entry) {
+      return false;
+    }
+
+    const target =
+      deref(entry.targetRef) ||
+      findElementByDomPath(entry.domPath) ||
+      findElementByTargetHint(entry.target);
+    if (!target || typeof target.dispatchEvent !== 'function') {
+      return false;
+    }
+
+    const eventType = entry.eventName || 'click';
+    const init = Object.assign({ bubbles: true, cancelable: true, composed: true }, entry.eventInit || {});
+    let synthetic;
+
+    try {
+      if (eventType.startsWith('mouse') || eventType === 'click' || eventType === 'dblclick') {
+        synthetic = new MouseEvent(eventType, init);
+      } else if (eventType.startsWith('key')) {
+        synthetic = new KeyboardEvent(eventType, init);
+      } else if (typeof CustomEvent === 'function') {
+        synthetic = new CustomEvent(eventType, { ...init, detail: entry.detail || null });
+      } else {
+        synthetic = new Event(eventType, init);
+      }
+    } catch {
+      try {
+        synthetic = document.createEvent('Event');
+        synthetic.initEvent(eventType, true, true);
+      } catch {
+        return false;
+      }
+    }
+
+    return target.dispatchEvent(synthetic);
+  }
+
+  function getInteractionLog() {
+    return interactionLog.map(exportInteraction).filter((x) => x);
+  }
+
+  function exportInteraction(entry) {
+    if (!entry) {
+      return null;
+    }
+    const { vmRef, targetRef, bindingRef, ...rest } = entry;
+    return {
+      ...rest,
+      before: rest.before ? sanitizeForTransport(rest.before) : null,
+      after: rest.after ? sanitizeForTransport(rest.after) : null,
+      eventInit: rest.eventInit ? sanitizeForTransport(rest.eventInit) : undefined,
+      detail: rest.detail ? sanitizeForTransport(rest.detail) : undefined,
+      canApplySnapshot: !!vmRef || !!rest.target,
+      target: rest.target ? sanitizeForTransport(rest.target) : undefined,
+    };
+  }
+
+  function clearInteractionLog() {
+    interactionLog.length = 0;
+    interactionSequence = 0;
+    return true;
+  }
+
+  function findInteractionEntry(id) {
+    return interactionLog.find((entry) => entry && entry.id === id) || null;
+  }
+
+  function deref(ref) {
+    if (!ref) {
+      return null;
+    }
+    if (typeof ref.deref === 'function') {
+      return ref.deref();
+    }
+    return ref;
+  }
+
+  function findElementByDomPath(domPath) {
+    if (!domPath || typeof domPath !== 'string') {
+      return null;
+    }
+    try {
+      return document.querySelector(domPath);
+    } catch {
+      return null;
+    }
+  }
+
+  function findElementByTargetHint(hint) {
+    if (!hint) return null;
+    const domCandidate = hint.domPath ? findElementByDomPath(hint.domPath) : null;
+    if (domCandidate) return domCandidate;
+    if (hint.href) {
+      try {
+        const match = Array.from(document.querySelectorAll('a')).find((a) => a.href === hint.href);
+        if (match) return match;
+      } catch {}
+    }
+    if (!hooks.findElementByComponentInfo) return null;
+    const fakeInfo = {
+      customElementInfo: hint.componentType === 'custom-element'
+        ? { name: hint.componentName, key: hint.componentKey }
+        : null,
+      customAttributesInfo: hint.componentType === 'custom-attribute'
+        ? [{ name: hint.componentName, key: hint.componentKey }]
+        : [],
+    };
+    try {
+      return hooks.findElementByComponentInfo(fakeInfo);
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveViewModelFromElement(element, hint) {
+    if (!element) return null;
+    // Aurelia v2
+    const auV2 = element['$au'];
+    if (auV2) {
+      const ce = auV2['au:resource:custom-element'];
+      if (ce && matchesHint(ce.definition, hint)) {
+        return ce.viewModel || ce;
+      }
+      const attr = findMatchingAttribute(auV2, hint);
+      if (attr) return attr.viewModel || attr;
+    }
+    // Aurelia v1
+    const auV1 = element.au;
+    if (auV1 && auV1.controller && matchesHint(auV1.controller.behavior, hint)) {
+      return auV1.controller.viewModel || auV1.controller;
+    }
+    if (auV1) {
+      const tagName = element.tagName ? element.tagName.toLowerCase() : null;
+      for (const key in auV1) {
+        if (key === 'controller' || key === tagName) continue;
+        const candidate = auV1[key];
+        if (candidate && candidate.behavior && matchesHint(candidate.behavior, hint)) {
+          return candidate.viewModel || candidate;
+        }
+      }
+    }
+    return null;
+  }
+
+  function matchesHint(definition, hint) {
+    if (!hint || !definition) return true;
+    const name = definition.name || definition.elementName || definition.attributeName;
+    const key = definition.key || definition.attributeName || definition.elementName;
+    if (hint.componentKey && key) {
+      return hint.componentKey === key;
+    }
+    if (hint.componentName && name) {
+      return hint.componentName === name;
+    }
+    return true;
+  }
+
+  function findMatchingAttribute(auV2, hint) {
+    if (!hint) return null;
+    const keys = Object.getOwnPropertyNames(auV2).filter((k) => k.includes('custom-attribute'));
+    for (const k of keys) {
+      const attr = auV2[k];
+      if (attr && attr.definition && matchesHint(attr.definition, hint)) {
+        return attr;
+      }
+    }
+    return null;
+  }
+
+  function buildTargetHint(binding, domPath) {
+    const hint = {
+      domPath: domPath || null,
+      tagName: null,
+      componentName: null,
+      componentKey: null,
+      componentType: 'unknown',
+      href: null,
+    };
+    try {
+      const target = binding && binding.target;
+      if (target && target.tagName) {
+        hint.tagName = target.tagName.toLowerCase();
+      }
+      if (target && target.href) {
+        hint.href = target.href;
+      }
+      if (hooks.getCustomElementInfo && target) {
+        const info = hooks.getCustomElementInfo(target, false);
+        if (info && info.customElementInfo) {
+          hint.componentType = 'custom-element';
+          hint.componentName = info.customElementInfo.name || null;
+          hint.componentKey = info.customElementInfo.key || null;
+        } else if (info && info.customAttributesInfo && info.customAttributesInfo.length) {
+          const firstAttr = info.customAttributesInfo[0];
+          hint.componentType = 'custom-attribute';
+          hint.componentName = firstAttr.name || null;
+          hint.componentKey = firstAttr.key || null;
+        }
+      }
+    } catch {}
+    return hint;
+  }
+
+  function logInteraction(entry, meta) {
+    interactionLog.push({
+      ...entry,
+      ...meta,
+    });
+
+    if (interactionLog.length > MAX_INTERACTION_LOG) {
+      interactionLog.shift();
+    }
+
+    try {
+      const exported = exportInteraction(entry);
+      if (exported) {
+        window.dispatchEvent(new CustomEvent('aurelia-devtools:interaction', { detail: exported }));
+      }
+    } catch {}
+  }
+
+  function installNavigationListeners() {
+    try {
+      let lastHref = location.href;
+      const record = (source) => {
+        const current = location.href;
+        if (current === lastHref) return;
+        const entry = {
+          id: `nav-${++interactionSequence}`,
+          eventName: 'route-change',
+          domPath: null,
+          timestamp: Date.now(),
+          duration: 0,
+          mode: 'navigation',
+          vmName: undefined,
+          handlerName: source,
+          before: null,
+          after: null,
+          error: null,
+          replayable: false,
+          canApplySnapshot: false,
+          eventInit: { from: lastHref, to: current, source },
+          detail: { from: lastHref, to: current, source },
+          target: { href: current, componentType: 'unknown', domPath: null, tagName: null, componentName: null, componentKey: null },
+        };
+        logInteraction(entry, {});
+        lastHref = current;
+      };
+
+      const wrap = (methodName) => {
+        const original = history[methodName];
+        if (typeof original !== 'function') return;
+        history[methodName] = function(state, title, url) {
+          const result = original.apply(this, arguments);
+          record(methodName);
+          return result;
+        };
+      };
+
+      wrap('pushState');
+      wrap('replaceState');
+      window.addEventListener('popstate', () => record('popstate'), true);
+    } catch {}
+  }
+
+  function installRouterEventTap() {
+    try {
+      const hookInstall = () => {
+        const ea = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__?.Aurelia?.container?.get?.({ key: 'IEventAggregator' }) || null;
+        if (!ea || typeof ea.subscribe !== 'function') return false;
+
+        const routerEvents = [
+          'au:router:location-change',
+          'au:router:navigation-start',
+          'au:router:navigation-end',
+          'au:router:navigation-cancel',
+          'au:router:navigation-error',
+        ];
+
+        routerEvents.forEach((eventName) => {
+          try {
+            ea.subscribe(eventName, (msg) => {
+              const detail = sanitizeForTransport(msg);
+              const entry = {
+                id: `router-${++interactionSequence}`,
+                eventName,
+                domPath: null,
+                timestamp: Date.now(),
+                duration: 0,
+                mode: 'navigation',
+                vmName: undefined,
+                handlerName: 'router',
+                before: null,
+                after: null,
+                error: null,
+                replayable: false,
+                canApplySnapshot: false,
+                eventInit: detail,
+                detail,
+                target: { href: detail?.url || location.href, componentType: 'unknown', domPath: null, tagName: null, componentName: null, componentKey: null },
+              };
+              logInteraction(entry, {});
+            });
+          } catch {}
+        });
+        return true;
+      };
+
+      // If Aurelia already installed, try immediately; otherwise retry a few times
+      if (!hookInstall()) {
+        let attempts = 0;
+        const t = setInterval(() => {
+          attempts++;
+          if (hookInstall() || attempts > 10) {
+            clearInterval(t);
+          }
+        }, 300);
+      }
+    } catch {}
+  }
+
+  function extractEventInit(event) {
+    if (!event || typeof event !== 'object') {
+      return { bubbles: true, cancelable: true, composed: true };
+    }
+    const base = {
+      bubbles: !!event.bubbles,
+      cancelable: !!event.cancelable,
+      composed: !!event.composed,
+    };
+
+    if (typeof MouseEvent !== 'undefined' && event instanceof MouseEvent) {
+      return Object.assign(base, {
+        button: event.button,
+        buttons: event.buttons,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        metaKey: event.metaKey,
+      });
+    }
+
+    if (typeof KeyboardEvent !== 'undefined' && event instanceof KeyboardEvent) {
+      return Object.assign(base, {
+        key: event.key,
+        code: event.code,
+        keyCode: event.keyCode,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        metaKey: event.metaKey,
+      });
+    }
+
+    if (typeof CustomEvent !== 'undefined' && event instanceof CustomEvent) {
+      return Object.assign(base, {
+        detail: sanitizeForTransport(event.detail),
+      });
+    }
+
+    return base;
+  }
+
+  function inferEventMode(binding) {
+    if (!binding) {
+      return 'unknown';
+    }
+    if (binding._options && binding._options.capture) {
+      return 'capture';
+    }
+    if (binding.self) {
+      return 'trigger';
+    }
+    return 'delegate';
+  }
+
+  function inferHandlerName(binding) {
+    try {
+      const ast = binding && binding.ast;
+      if (ast && ast.name) {
+        return ast.name;
+      }
+      if (ast && ast.value && ast.value.name) {
+        return ast.value.name;
+      }
+      if (ast && typeof ast.toString === 'function') {
+        const str = String(ast);
+        if (str && str.length < 120) {
+          return str;
+        }
+      }
+    } catch {}
+    return undefined;
+  }
 
   function getDomPath(element) {
     if (!element || element.nodeType !== 1) {
@@ -768,13 +1637,24 @@ function install(debugValueLookup) {
     return { columns, rows };
   }
 
-  function sanitizeForTransport(value, seen) {
+  function sanitizeForTransport(value, seen, depth) {
     if (value == null) {
       return value;
     }
 
     if (!seen) {
       seen = new Set();
+    }
+    if (depth === undefined) {
+      depth = 0;
+    }
+
+    const MAX_DEPTH = 5;
+    const MAX_KEYS = 30;
+    const MAX_ARRAY = 50;
+
+    if (depth > MAX_DEPTH) {
+      return '[Max Depth]';
     }
 
     if (typeof value === 'function') {
@@ -792,7 +1672,11 @@ function install(debugValueLookup) {
       seen.add(value);
 
       if (Array.isArray(value)) {
-        const mapped = value.map((item) => sanitizeForTransport(item, seen));
+        const slice = value.length > MAX_ARRAY ? value.slice(0, MAX_ARRAY) : value;
+        const mapped = slice.map((item) => sanitizeForTransport(item, seen, depth + 1));
+        if (value.length > MAX_ARRAY) {
+          mapped.push(`[...${value.length - MAX_ARRAY} more]`);
+        }
         seen.delete(value);
         return mapped;
       }
@@ -808,9 +1692,22 @@ function install(debugValueLookup) {
       }
 
       const output = {};
-      Object.keys(value).forEach((key) => {
-        output[key] = sanitizeForTransport(value[key], seen);
-      });
+      let keyCount = 0;
+      const keys = Object.keys(value);
+      for (const key of keys) {
+        if (keyCount >= MAX_KEYS) {
+          output['...'] = `${keys.length - MAX_KEYS} more keys`;
+          break;
+        }
+        if (key.startsWith('_') || key.startsWith('$')) continue;
+        try {
+          output[key] = sanitizeForTransport(value[key], seen, depth + 1);
+          keyCount++;
+        } catch {
+          output[key] = '[Unreadable]';
+          keyCount++;
+        }
+      }
       seen.delete(value);
       return output;
     }
@@ -824,25 +1721,60 @@ function install(debugValueLookup) {
     try {
       // Handle Aurelia v2 (both custom elements and custom attributes)
       if (controller.definition && controller.viewModel) {
+        const interpolationMap = extractInterpolationMap(controller);
         const bindableKeys = Object.keys(controller.definition.bindables || {});
-        return {
-          bindables: bindableKeys.map((y) => {
-            return setValueOnDebugInfo(
+        const properties = Object.keys(controller.viewModel)
+          .filter((x) => !bindableKeys.some((y) => y === x))
+          .filter((x) => !x.startsWith("$"))
+          .map((y) => {
+            const debugInfo = setValueOnDebugInfo(
               { name: y },
               controller.viewModel[y],
               controller.viewModel,
             );
+            if (interpolationMap[y] && interpolationMap[y].length) {
+              debugInfo.expression = interpolationMap[y].join(' | ');
+            }
+            return debugInfo;
+          });
+
+        const bindingList = getControllerBindings(controller);
+        if (bindingList && bindingList.length) {
+          properties.unshift(
+            setValueOnDebugInfo(
+              { name: 'bindings', canEdit: false },
+              bindingList,
+              controller,
+              { canEdit: false }
+            )
+          );
+        }
+
+        const instructions = getControllerInstructions(controller);
+        if (instructions && instructions.length) {
+          properties.unshift(
+            setValueOnDebugInfo(
+              { name: 'instructions', canEdit: false },
+              instructions,
+              controller,
+              { canEdit: false }
+            )
+          );
+        }
+
+        return {
+          bindables: bindableKeys.map((y) => {
+            const debugInfo = setValueOnDebugInfo(
+              { name: y },
+              controller.viewModel[y],
+              controller.viewModel,
+            );
+            if (interpolationMap[y] && interpolationMap[y].length) {
+              debugInfo.expression = interpolationMap[y].join(' | ');
+            }
+            return debugInfo;
           }),
-          properties: Object.keys(controller.viewModel)
-            .filter((x) => !bindableKeys.some((y) => y === x))
-            .filter((x) => !x.startsWith("$"))
-            .map((y) => {
-              return setValueOnDebugInfo(
-                { name: y },
-                controller.viewModel[y],
-                controller.viewModel,
-              );
-            }),
+          properties,
           name: controller.definition.name,
           aliases: controller.definition.aliases || [],
           key: controller.definition.key,
@@ -852,29 +1784,63 @@ function install(debugValueLookup) {
       }
       // Handle Aurelia v1 (both custom elements and custom attributes)
       else if (controller.behavior && controller.viewModel) {
+        const interpolationMap = extractInterpolationMap(controller);
         const behavior = controller.behavior;
         const viewModel = controller.viewModel;
         const bindableProperties = behavior.properties || [];
         const bindableKeys = bindableProperties.map(prop => prop.name);
+        const properties = Object.keys(viewModel)
+          .filter((x) => !bindableKeys.some((y) => y === x))
+          .filter((x) => !x.startsWith("$") && !denyListProps.includes(x))
+          .map((y) => {
+            const debugInfo = setValueOnDebugInfo(
+              { name: y },
+              viewModel[y],
+              viewModel,
+            );
+            if (interpolationMap[y] && interpolationMap[y].length) {
+              debugInfo.expression = interpolationMap[y].join(' | ');
+            }
+            return debugInfo;
+          });
+
+        const bindingList = getControllerBindings(controller);
+        if (bindingList && bindingList.length) {
+          properties.unshift(
+            setValueOnDebugInfo(
+              { name: 'bindings', canEdit: false },
+              bindingList,
+              controller,
+              { canEdit: false }
+            )
+          );
+        }
+
+        const instructions = getControllerInstructions(controller);
+        if (instructions && instructions.length) {
+          properties.unshift(
+            setValueOnDebugInfo(
+              { name: 'instructions', canEdit: false },
+              instructions,
+              controller,
+              { canEdit: false }
+            )
+          );
+        }
 
         return {
           bindables: bindableProperties.map((prop) => {
-            return setValueOnDebugInfo(
+            const debugInfo = setValueOnDebugInfo(
               { name: prop.name, attribute: prop.attribute },
               viewModel[prop.name],
               viewModel,
             );
+            if (interpolationMap[prop.name] && interpolationMap[prop.name].length) {
+              debugInfo.expression = interpolationMap[prop.name].join(' | ');
+            }
+            return debugInfo;
           }),
-          properties: Object.keys(viewModel)
-            .filter((x) => !bindableKeys.some((y) => y === x))
-            .filter((x) => !x.startsWith("$") && !denyListProps.includes(x))
-            .map((y) => {
-              return setValueOnDebugInfo(
-                { name: y },
-                viewModel[y],
-                viewModel,
-              );
-            }),
+          properties,
           name: behavior.elementName || behavior.attributeName,
           aliases: [],
           key: behavior.elementName || behavior.attributeName,
@@ -885,18 +1851,43 @@ function install(debugValueLookup) {
       else if (controller.viewModel || controller.bindingContext) {
         const viewModel = controller.viewModel || controller.bindingContext;
         const name = controller.name || controller.constructor?.name || 'unknown';
+        const properties = Object.keys(viewModel)
+          .filter((x) => !x.startsWith("$") && !denyListProps.includes(x))
+          .map((y) => {
+            return setValueOnDebugInfo(
+              { name: y },
+              viewModel[y],
+              viewModel,
+            );
+          });
+
+        const bindingList = getControllerBindings(controller);
+        if (bindingList && bindingList.length) {
+          properties.unshift(
+            setValueOnDebugInfo(
+              { name: 'bindings', canEdit: false },
+              bindingList,
+              controller,
+              { canEdit: false }
+            )
+          );
+        }
+
+        const instructions = getControllerInstructions(controller);
+        if (instructions && instructions.length) {
+          properties.unshift(
+            setValueOnDebugInfo(
+              { name: 'instructions', canEdit: false },
+              instructions,
+              controller,
+              { canEdit: false }
+            )
+          );
+        }
 
         return {
           bindables: [],
-          properties: Object.keys(viewModel)
-            .filter((x) => !x.startsWith("$") && !denyListProps.includes(x))
-            .map((y) => {
-              return setValueOnDebugInfo(
-                { name: y },
-                viewModel[y],
-                viewModel,
-              );
-            }),
+          properties,
           name: name,
           aliases: [],
           key: name,
@@ -1111,9 +2102,374 @@ function install(debugValueLookup) {
     return { properties };
   }
 
+  function getControllerBindings(controller) {
+    try {
+      const view = controller && (controller.view || controller.viewModel?.view || controller.viewModel?.$view || controller.viewCache?.peek?.());
+      const bindings = view && Array.isArray(view.bindings) ? view.bindings : null;
+      return bindings && bindings.length ? bindings : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractInterpolationMap(controller) {
+    const map = {};
+    try {
+      const bindings = getControllerBindings(controller);
+      if (!bindings) return map;
+
+      for (const binding of bindings) {
+        if (!binding) continue;
+
+        const ast = binding.ast || binding.sourceExpression || binding.expression;
+        if (!ast) continue;
+
+        const kind = ast.$kind || ast.kind || ast.type || (ast.constructor && ast.constructor.name);
+        if (kind === 'Interpolation') {
+          const fullExpr = unparseExpression(ast);
+          const referencedNames = extractReferencedNames(ast);
+          for (const name of referencedNames) {
+            if (!map[name]) {
+              map[name] = [];
+            }
+            map[name].push(fullExpr);
+          }
+        } else {
+          const referencedNames = extractReferencedNames(ast);
+          if (referencedNames.length) {
+            const fullExpr = unparseExpression(ast);
+            for (const name of referencedNames) {
+              if (!map[name]) {
+                map[name] = [];
+              }
+              if (fullExpr && !map[name].includes(fullExpr)) {
+                map[name].push(fullExpr);
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+    return map;
+  }
+
+  function extractReferencedNames(ast) {
+    const names = [];
+    if (!ast) return names;
+
+    const visit = (node) => {
+      if (!node) return;
+      const kind = node.$kind || node.kind || node.type || (node.constructor && node.constructor.name);
+
+      switch (kind) {
+        case 'AccessScope':
+          if (node.name && !node.ancestor) {
+            names.push(node.name);
+          }
+          break;
+        case 'AccessMember':
+          if (node.object) {
+            const objKind = node.object.$kind || node.object.kind || node.object.type || (node.object.constructor && node.object.constructor.name);
+            if (objKind === 'AccessScope' && node.object.name && !node.object.ancestor) {
+              names.push(node.object.name);
+            }
+            visit(node.object);
+          }
+          break;
+        case 'AccessKeyed':
+          if (node.object) visit(node.object);
+          if (node.key) visit(node.key);
+          break;
+        case 'CallScope':
+          if (node.name && !node.ancestor) {
+            names.push(node.name);
+          }
+          if (node.args) node.args.forEach(visit);
+          break;
+        case 'CallMember':
+          if (node.object) visit(node.object);
+          if (node.args) node.args.forEach(visit);
+          break;
+        case 'CallFunction':
+          if (node.func) visit(node.func);
+          if (node.args) node.args.forEach(visit);
+          break;
+        case 'Binary':
+          if (node.left) visit(node.left);
+          if (node.right) visit(node.right);
+          break;
+        case 'Unary':
+          if (node.expression) visit(node.expression);
+          break;
+        case 'Conditional':
+          if (node.condition) visit(node.condition);
+          if (node.yes) visit(node.yes);
+          if (node.no) visit(node.no);
+          break;
+        case 'Assign':
+          if (node.target) visit(node.target);
+          if (node.value) visit(node.value);
+          break;
+        case 'ValueConverter':
+        case 'BindingBehavior':
+          if (node.expression) visit(node.expression);
+          if (node.args) node.args.forEach(visit);
+          break;
+        case 'Template':
+        case 'TaggedTemplate':
+        case 'Interpolation':
+          if (node.expressions) node.expressions.forEach(visit);
+          break;
+        case 'ArrayLiteral':
+          if (node.elements) node.elements.forEach(visit);
+          break;
+        case 'ObjectLiteral':
+          if (node.values) node.values.forEach(visit);
+          break;
+        case 'ForOfStatement':
+          if (node.iterable) visit(node.iterable);
+          break;
+      }
+    };
+
+    visit(ast);
+    return [...new Set(names)];
+  }
+
+  function getControllerInstructions(controller) {
+    try {
+      const view = controller && (controller.view || controller.viewModel?.view || controller.viewModel?.$view || controller.viewCache?.peek?.());
+      const instructions = view && Array.isArray(view.instructions) ? view.instructions : null;
+      if (instructions && instructions.length && Array.isArray(instructions[0])) {
+        // Flatten instruction rows if needed
+        return instructions.flat().filter((x) => x);
+      }
+      return instructions && instructions.length ? instructions : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function isBindingLike(value) {
+    if (!value || (typeof value !== "object" && typeof value !== "function")) {
+      return false;
+    }
+
+    const ctorName = value.constructor && value.constructor.name;
+    const looksLikeCtor = typeof ctorName === 'string' && ctorName.toLowerCase().includes('binding');
+    const hasAst = !!(value && (value.ast || value.sourceExpression || value.expression));
+    const hasTargetMeta = 'targetProperty' in value || 'target' in value;
+    const hasBindMethods = typeof value.updateTarget === 'function' || typeof value.callSource === 'function' || typeof value.updateSource === 'function';
+    const hasInstructionShape = typeof value === 'object' && value !== null && ('from' in value) && ('to' in value);
+
+    return looksLikeCtor || hasInstructionShape || (hasAst && (hasBindMethods || hasTargetMeta));
+  }
+
+  function extractBindingExpression(binding) {
+    try {
+      const candidate = binding && (binding.ast || binding.sourceExpression || binding.expression || binding.from);
+      if (!candidate) return undefined;
+
+      if (typeof candidate === 'string') {
+        return candidate;
+      }
+
+      const unparsed = unparseExpression(candidate);
+      if (unparsed) return unparsed;
+
+      if (typeof candidate.expression === 'string') return candidate.expression;
+      if (typeof candidate.name === 'string') return candidate.name;
+      if (typeof binding.from === 'string') return binding.from;
+      if (typeof candidate.toString === 'function') {
+        const str = candidate.toString();
+        if (str && typeof str === 'string' && str !== '[object Object]') {
+          return str;
+        }
+      }
+    } catch {}
+    return undefined;
+  }
+
+  function unparseExpression(expr) {
+    try {
+      const visit = (node) => {
+        if (!node) return '';
+        const kind = node.$kind || node.kind || node.type || (node.constructor && node.constructor.name);
+        switch (kind) {
+          case 'AccessThis':
+            if (node.ancestor === 0) return '$this';
+            return Array(node.ancestor).fill('$parent').join('.');
+          case 'AccessScope': {
+            const parents = node.ancestor ? Array(node.ancestor).fill('$parent.').join('') : '';
+            return parents + node.name;
+          }
+          case 'AccessMember':
+            return `${visit(node.object)}${node.optional ? '?.' : '.'}${node.name}`;
+          case 'AccessKeyed':
+            return `${visit(node.object)}${node.optional ? '?.' : ''}[${visit(node.key)}]`;
+          case 'CallScope':
+            return `${visit({ $kind: 'AccessScope', name: node.name, ancestor: node.ancestor || 0 })}${node.optional ? '?.' : ''}(${(node.args || []).map(visit).join(', ')})`;
+          case 'CallMember':
+            return `${visit(node.object)}${node.optionalMember ? '?.' : '.'}${node.name}${node.optionalCall ? '?.' : ''}(${(node.args || []).map(visit).join(', ')})`;
+          case 'CallFunction':
+            return `${visit(node.func)}${node.optional ? '?.' : ''}(${(node.args || []).map(visit).join(', ')})`;
+          case 'PrimitiveLiteral':
+            if (typeof node.value === 'string') return `'${String(node.value).replace(/'/g, "\\'")}'`;
+            return String(node.value);
+          case 'ArrayLiteral':
+            return `[${(node.elements || []).map(visit).join(', ')}]`;
+          case 'ObjectLiteral':
+            return `{${(node.keys || []).map((k, i) => `'${k}':${visit(node.values[i])}`).join(',')}}`;
+          case 'Binary':
+            return `(${visit(node.left)}${node.operation.charCodeAt && node.operation.charCodeAt(0) === 105 ? ' ' + node.operation + ' ' : node.operation}${visit(node.right)})`;
+          case 'Unary':
+            return `(${node.operation}${node.operation.charCodeAt && node.operation.charCodeAt(0) >= 97 ? ' ' : ''}${visit(node.expression)})`;
+          case 'Conditional':
+            return `(${visit(node.condition)}?${visit(node.yes)}:${visit(node.no)})`;
+          case 'Assign':
+            return `(${visit(node.target)}=${visit(node.value)})`;
+          case 'ValueConverter':
+            return `${visit(node.expression)}|${node.name}${(node.args || []).map((a) => ':' + visit(a)).join('')}`;
+          case 'BindingBehavior':
+            return `${visit(node.expression)}&${node.name}${(node.args || []).map((a) => ':' + visit(a)).join('')}`;
+          case 'Template': {
+            const parts = node.cooked || [];
+            const exprs = node.expressions || [];
+            let text = '`' + (parts[0] || '');
+            for (let i = 0; i < exprs.length; i++) {
+              text += '${' + visit(exprs[i]) + '}' + (parts[i + 1] || '');
+            }
+            text += '`';
+            return text;
+          }
+          case 'TaggedTemplate': {
+            const parts = node.cooked || [];
+            const exprs = node.expressions || [];
+            let text = visit(node.func) + '`' + (parts[0] || '');
+            for (let i = 0; i < exprs.length; i++) {
+              text += '${' + visit(exprs[i]) + '}' + (parts[i + 1] || '');
+            }
+            text += '`';
+            return text;
+          }
+          case 'Interpolation': {
+            const parts = node.parts || [];
+            const exprs = node.expressions || [];
+            let text = parts[0] || '';
+            for (let i = 0; i < exprs.length; i++) {
+              text += '${' + visit(exprs[i]) + '}' + (parts[i + 1] || '');
+            }
+            return text;
+          }
+          case 'ForOfStatement':
+            return `${visit(node.declaration)} of ${visit(node.iterable)}`;
+          case 'BindingIdentifier':
+            return node.name;
+          case 'ArrayBindingPattern':
+            return `[${(node.elements || []).map(visit).join(', ')}]`;
+          case 'ObjectBindingPattern':
+            return `{${(node.keys || []).map((k, i) => `${k}:${visit(node.values[i])}`).join(',')}}`;
+          default:
+            return '';
+        }
+      };
+
+      const result = visit(expr);
+      return result || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function isAccessMemberAst(ast) {
+    if (!ast) return false;
+    const kind = ast.$kind || ast.kind || ast.type || (ast.constructor && ast.constructor.name);
+    return kind === 'AccessMember' || kind === 'CallMember' || kind === 'AccessKeyed';
+  }
+
+  function getFromScope(scope, name, ancestor) {
+    let current = scope || null;
+    let steps = typeof ancestor === 'number' ? ancestor : 0;
+
+    while (current && steps > 0) {
+      current = current.parent || current.parentScope || current.scope || current.parentContext || null;
+      steps -= 1;
+    }
+
+    if (!current) return undefined;
+
+    if (current.bindingContext && Object.prototype.hasOwnProperty.call(current.bindingContext, name)) {
+      return current.bindingContext[name];
+    }
+
+    if (current.overrideContext && Object.prototype.hasOwnProperty.call(current.overrideContext, name)) {
+      return current.overrideContext[name];
+    }
+
+    if (current.bindingContext && name in current.bindingContext) {
+      return current.bindingContext[name];
+    }
+
+    if (current.overrideContext && name in current.overrideContext) {
+      return current.overrideContext[name];
+    }
+
+    if (name in current) {
+      return current[name];
+    }
+
+    return undefined;
+  }
+
+  function evaluateAstNode(expr, scope) {
+    try {
+      if (!expr) return undefined;
+      const kind = expr.$kind || expr.kind || expr.type || (expr.constructor && expr.constructor.name);
+      switch (kind) {
+        case 'AccessThis':
+          return scope && scope.bindingContext ? scope.bindingContext : scope;
+        case 'AccessScope':
+          return getFromScope(scope, expr.name, expr.ancestor || 0);
+        case 'AccessMember': {
+          const base = evaluateAstNode(expr.object, scope);
+          return base != null ? base[expr.name] : undefined;
+        }
+        case 'AccessKeyed': {
+          const obj = evaluateAstNode(expr.object, scope);
+          const key = evaluateAstNode(expr.key, scope);
+          return obj != null ? obj[key] : undefined;
+        }
+        case 'PrimitiveLiteral':
+          return expr.value;
+        default:
+          return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+
+  function getBindingDetails(binding) {
+    if (!isBindingLike(binding)) {
+      return null;
+    }
+
+    const expression = extractBindingExpression(binding);
+    const details = { expression };
+
+    const ast = binding.ast || binding.sourceExpression || null;
+    if (isAccessMemberAst(ast)) {
+      const scope = binding.scope || binding._scope || binding.$scope || binding.sourceScope || binding.$context || binding.source || null;
+      details.member = evaluateAstNode(ast.object || ast.expression || null, scope);
+    }
+
+    return details;
+  }
+
   function setValueOnDebugInfo(debugInfo, value, instance, overrides) {
     try {
       overrides = overrides || {};
+      const bindingDetails = isBindingLike(value) ? getBindingDetails(value) : null;
       debugInfo.canExpand = false;
       debugInfo.canEdit = false;
       let expandableValue;
@@ -1158,6 +2514,11 @@ function install(debugValueLookup) {
         } else {
           debugInfo.value = "Object";
         }
+      }
+
+      if (bindingDetails) {
+        debugInfo.type = debugInfo.type === 'object' ? 'binding' : debugInfo.type;
+        debugInfo.expression = bindingDetails.expression;
       }
 
       if (
@@ -1252,7 +2613,56 @@ function install(debugValueLookup) {
     }
   }
 
+  function convertBindingToDebugInfo(binding, blackList) {
+    blackList = blackList || {};
+    const properties = [];
+    const details = getBindingDetails(binding) || {};
+
+    if (details.expression) {
+      properties.push(
+        setValueOnDebugInfo(
+          { name: 'expression', canEdit: false },
+          details.expression,
+          binding,
+          { type: 'string', canExpand: false, canEdit: false }
+        )
+      );
+    }
+
+    if (details && Object.prototype.hasOwnProperty.call(details, 'member')) {
+      properties.push(
+        setValueOnDebugInfo(
+          { name: 'member', canEdit: false },
+          details.member,
+          binding,
+          { canEdit: false }
+        )
+      );
+    }
+
+    const keys = getDebugPropertyKeys(binding).filter((x) => !(x in blackList));
+    for (const key of keys) {
+      try {
+        properties.push(
+          setValueOnDebugInfo(
+            { name: key },
+            binding[key],
+            binding
+          )
+        );
+      } catch (e) {
+        properties.push({ name: key, type: 'error', value: 'unavailable' });
+      }
+    }
+
+    return { properties };
+  }
+
   function convertObjectToDebugInfo(obj, blackList) {
+    if (isBindingLike(obj)) {
+      return convertBindingToDebugInfo(obj, blackList);
+    }
+
     blackList = blackList || {};
     return {
       properties: getDebugPropertyKeys(obj)
