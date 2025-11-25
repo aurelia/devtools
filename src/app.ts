@@ -40,6 +40,7 @@ export class App implements ICustomElementViewModel {
   selectedBreadcrumb: ComponentNode[] = [];
   selectedComponentId: string = undefined;
   searchQuery: string = '';
+  searchMode: 'name' | 'property' | 'all' = 'name';
   isElementPickerActive: boolean = false;
   // Preference: follow Chrome Elements selection automatically
   followChromeSelection: boolean = true;
@@ -57,6 +58,17 @@ export class App implements ICustomElementViewModel {
   // Property watching
   private propertyChangeListener: ((msg: any, sender: any) => void) | null = null;
   private treeChangeListener: ((msg: any, sender: any) => void) | null = null;
+
+  // Expression evaluation
+  expressionInput: string = '';
+  expressionResult: string = '';
+  expressionResultType: string = '';
+  expressionError: string = '';
+  expressionHistory: string[] = [];
+  isExpressionPanelOpen: boolean = false;
+
+  // Copy feedback
+  copiedPropertyId: string | null = null;
 
   // Detection status
   aureliaDetected: boolean = false;
@@ -1022,15 +1034,44 @@ export class App implements ICustomElementViewModel {
     query: string
   ): ComponentNode[] {
     const filtered: ComponentNode[] = [];
-    const queryVariants = getNamingVariants(query);
+    const lowerQuery = query.toLowerCase();
 
     for (const node of nodes) {
-      const nodeVariants = getNamingVariants(node.name);
-      const matchesSearch =
-        nodeVariants.some((variant) =>
+      let matchesSearch = false;
+      let matchedPropertyName: string | null = null;
+
+      // Name-based search (with fuzzy matching)
+      if (this.searchMode === 'name' || this.searchMode === 'all') {
+        const queryVariants = getNamingVariants(query);
+        const nodeVariants = getNamingVariants(node.name);
+
+        // Exact substring match (highest priority)
+        const exactMatch = nodeVariants.some((variant) =>
           queryVariants.some((q) => variant.includes(q))
-        ) ||
-        node.type.toLowerCase().includes(query);
+        );
+
+        // Fuzzy match (lower priority)
+        const isFuzzyMatch = fuzzyMatch(node.name.toLowerCase(), lowerQuery);
+
+        // Type match
+        const typeMatch = node.type.toLowerCase().includes(lowerQuery);
+
+        matchesSearch = exactMatch || isFuzzyMatch || typeMatch;
+      }
+
+      // Property value search
+      if ((this.searchMode === 'property' || this.searchMode === 'all') && !matchesSearch) {
+        const info = node.data.kind === 'element'
+          ? node.data.info.customElementInfo
+          : node.data.raw;
+
+        if (info) {
+          matchedPropertyName = this.searchInProperties(info, lowerQuery);
+          if (matchedPropertyName) {
+            matchesSearch = true;
+          }
+        }
+      }
 
       const filteredChildren = this.filterComponentTree(node.children, query);
 
@@ -1039,6 +1080,7 @@ export class App implements ICustomElementViewModel {
           ...node,
           children: filteredChildren,
           expanded: filteredChildren.length > 0 || node.expanded,
+          matchedProperty: matchedPropertyName,
         };
         filtered.push(filteredNode);
       }
@@ -1047,9 +1089,75 @@ export class App implements ICustomElementViewModel {
     return filtered;
   }
 
+  private searchInProperties(info: IControllerInfo, query: string): string | null {
+    const allProperties = [
+      ...(info.bindables || []),
+      ...(info.properties || []),
+    ];
+
+    for (const prop of allProperties) {
+      if (!prop) continue;
+
+      // Search in property name
+      if (prop.name?.toLowerCase().includes(query)) {
+        return prop.name;
+      }
+
+      // Search in property value
+      const valueStr = this.propertyValueToSearchString(prop.value);
+      if (valueStr.toLowerCase().includes(query)) {
+        return prop.name;
+      }
+    }
+
+    return null;
+  }
+
+  private propertyValueToSearchString(value: unknown): string {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return `[${value.length} items]`;
+    if (typeof value === 'object') {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return '[object]';
+      }
+    }
+    return String(value);
+  }
+
   clearSearch() {
     this.searchQuery = '';
     // Filtering automatically updates via the reactive getter
+  }
+
+  setSearchMode(mode: 'name' | 'property' | 'all') {
+    this.searchMode = mode;
+  }
+
+  cycleSearchMode() {
+    const modes: Array<'name' | 'property' | 'all'> = ['name', 'property', 'all'];
+    const currentIndex = modes.indexOf(this.searchMode);
+    this.searchMode = modes[(currentIndex + 1) % modes.length];
+  }
+
+  get searchModeLabel(): string {
+    switch (this.searchMode) {
+      case 'name': return 'Name';
+      case 'property': return 'Props';
+      case 'all': return 'All';
+    }
+  }
+
+  get searchPlaceholder(): string {
+    switch (this.searchMode) {
+      case 'name': return 'Search components...';
+      case 'property': return 'Search property values...';
+      case 'all': return 'Search names & properties...';
+    }
   }
 
   // Component highlighting methods
@@ -1384,6 +1492,197 @@ export class App implements ICustomElementViewModel {
     delete property.originalValue;
   }
 
+  // Copy property value to clipboard
+  async copyPropertyValue(property: Property, event?: Event) {
+    event?.stopPropagation();
+
+    let valueToCopy: string;
+    if (property.value === null) {
+      valueToCopy = 'null';
+    } else if (property.value === undefined) {
+      valueToCopy = 'undefined';
+    } else if (typeof property.value === 'object') {
+      try {
+        valueToCopy = JSON.stringify(property.value, null, 2);
+      } catch {
+        valueToCopy = String(property.value);
+      }
+    } else {
+      valueToCopy = String(property.value);
+    }
+
+    try {
+      await navigator.clipboard.writeText(valueToCopy);
+      this.copiedPropertyId = `${property.name}-${property.debugId || ''}`;
+      setTimeout(() => {
+        this.copiedPropertyId = null;
+      }, 1500);
+    } catch (error) {
+      console.warn('Failed to copy to clipboard:', error);
+    }
+  }
+
+  isPropertyCopied(property: Property): boolean {
+    return this.copiedPropertyId === `${property.name}-${property.debugId || ''}`;
+  }
+
+  // Export component state as JSON
+  async exportComponentAsJson(copyToClipboard = true) {
+    if (!this.selectedElement) return;
+
+    const exportData = {
+      meta: {
+        name: this.selectedElement.name,
+        type: this.selectedNodeType,
+        key: this.selectedElement.key,
+        aliases: this.selectedElement.aliases,
+        exportedAt: new Date().toISOString(),
+      },
+      bindables: this.serializeProperties(this.selectedElement.bindables || []),
+      properties: this.serializeProperties(this.selectedElement.properties || []),
+      controller: this.selectedElement.controller
+        ? { properties: this.serializeProperties(this.selectedElement.controller.properties || []) }
+        : undefined,
+      customAttributes: this.selectedElementAttributes?.map(attr => ({
+        name: attr.name,
+        bindables: this.serializeProperties(attr.bindables || []),
+        properties: this.serializeProperties(attr.properties || []),
+      })) || [],
+    };
+
+    const jsonString = JSON.stringify(exportData, null, 2);
+
+    if (copyToClipboard) {
+      try {
+        await navigator.clipboard.writeText(jsonString);
+        this.copiedPropertyId = '__export__';
+        setTimeout(() => {
+          this.copiedPropertyId = null;
+        }, 1500);
+      } catch (error) {
+        console.warn('Failed to copy export to clipboard:', error);
+        this.downloadJson(jsonString, `${this.selectedElement.name || 'component'}-state.json`);
+      }
+    } else {
+      this.downloadJson(jsonString, `${this.selectedElement.name || 'component'}-state.json`);
+    }
+  }
+
+  get isExportCopied(): boolean {
+    return this.copiedPropertyId === '__export__';
+  }
+
+  private serializeProperties(properties: Property[]): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const prop of properties) {
+      if (prop && prop.name) {
+        result[prop.name] = {
+          value: prop.value,
+          type: prop.type,
+        };
+      }
+    }
+    return result;
+  }
+
+  private downloadJson(content: string, filename: string) {
+    const blob = new Blob([content], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Expression evaluation
+  toggleExpressionPanel() {
+    this.isExpressionPanelOpen = !this.isExpressionPanelOpen;
+  }
+
+  async evaluateExpression() {
+    const expression = this.expressionInput.trim();
+    if (!expression || !this.selectedElement) return;
+
+    this.expressionError = '';
+    this.expressionResult = '';
+    this.expressionResultType = '';
+
+    // Add to history if not duplicate
+    if (!this.expressionHistory.includes(expression)) {
+      this.expressionHistory = [expression, ...this.expressionHistory.slice(0, 9)];
+    }
+
+    const componentKey = this.selectedElement.key || this.selectedElement.name;
+    if (!componentKey) {
+      this.expressionError = 'No component selected';
+      return;
+    }
+
+    const code = `
+      (function() {
+        try {
+          var hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || !hook.evaluateInComponentContext) {
+            return { error: 'DevTools hook not available' };
+          }
+          var result = hook.evaluateInComponentContext(${JSON.stringify(componentKey)}, ${JSON.stringify(expression)});
+          return result;
+        } catch (e) {
+          return { error: e.message || String(e) };
+        }
+      })()
+    `;
+
+    if (chrome?.devtools?.inspectedWindow) {
+      chrome.devtools.inspectedWindow.eval(
+        code,
+        (result: any, isException?: any) => {
+          if (isException) {
+            this.expressionError = String(isException);
+            return;
+          }
+
+          if (result && result.error) {
+            this.expressionError = result.error;
+            return;
+          }
+
+          if (result && result.success) {
+            this.expressionResultType = result.type || typeof result.value;
+            try {
+              if (result.value === undefined) {
+                this.expressionResult = 'undefined';
+              } else if (result.value === null) {
+                this.expressionResult = 'null';
+              } else if (typeof result.value === 'object') {
+                this.expressionResult = JSON.stringify(result.value, null, 2);
+              } else {
+                this.expressionResult = String(result.value);
+              }
+            } catch {
+              this.expressionResult = String(result.value);
+            }
+          } else {
+            this.expressionError = 'Unknown response format';
+          }
+        }
+      );
+    }
+  }
+
+  selectHistoryExpression(expr: string) {
+    this.expressionInput = expr;
+  }
+
+  clearExpressionResult() {
+    this.expressionResult = '';
+    this.expressionResultType = '';
+    this.expressionError = '';
+  }
+
   refreshPropertyBindings() {
     // Force Aurelia to re-render property bindings by updating object references
     if (this.selectedElement) {
@@ -1554,6 +1853,7 @@ interface ComponentNode {
   data: ComponentNodeData;
   expanded: boolean;
   hasAttributes: boolean;
+  matchedProperty?: string | null;
 }
 
 type ComponentNodeData =
@@ -1619,4 +1919,18 @@ function getNamingVariants(name: string): string[] {
   const camel = toCamelCase(kebab);
   const variants = new Set([lower, kebab.toLowerCase(), pascal.toLowerCase(), camel.toLowerCase()]);
   return [...variants];
+}
+
+function fuzzyMatch(text: string, pattern: string): boolean {
+  if (!pattern || !text) return false;
+  if (pattern.length > text.length) return false;
+
+  let patternIdx = 0;
+  for (let i = 0; i < text.length && patternIdx < pattern.length; i++) {
+    if (text[i] === pattern[patternIdx]) {
+      patternIdx++;
+    }
+  }
+
+  return patternIdx === pattern.length;
 }

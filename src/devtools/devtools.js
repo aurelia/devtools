@@ -483,6 +483,101 @@ function install(debugValueLookup) {
       return convertObjectToDebugInfo(value);
     },
 
+    evaluateInComponentContext(componentKey, expression) {
+      try {
+        // Find the component by key
+        let viewModel = null;
+
+        // Try Aurelia v2 first
+        const allElements = document.querySelectorAll('*');
+        for (const element of allElements) {
+          const auV2 = element['$au'];
+          if (auV2) {
+            const ce = auV2['au:resource:custom-element'];
+            if (ce) {
+              const key = ce.definition?.key || ce.definition?.name;
+              const name = ce.definition?.name;
+              if (key === componentKey || name === componentKey) {
+                viewModel = ce.viewModel || ce.instance;
+                break;
+              }
+            }
+          }
+
+          // Try Aurelia v1
+          const auV1 = element.au;
+          if (auV1 && auV1.controller) {
+            const ctrl = auV1.controller;
+            const key = ctrl.behavior?.elementName || ctrl.behavior?.attributeName;
+            if (key === componentKey) {
+              viewModel = ctrl.viewModel || ctrl.bindingContext;
+              break;
+            }
+          }
+        }
+
+        if (!viewModel) {
+          return { success: false, error: 'Component not found: ' + componentKey };
+        }
+
+        // Create a function that executes in the viewmodel context
+        const evalFn = new Function('return (' + expression + ')');
+        const result = evalFn.call(viewModel);
+
+        // Serialize the result
+        let serializedValue;
+        let resultType = typeof result;
+
+        if (result === null) {
+          serializedValue = null;
+          resultType = 'null';
+        } else if (result === undefined) {
+          serializedValue = undefined;
+          resultType = 'undefined';
+        } else if (typeof result === 'function') {
+          serializedValue = '[Function: ' + (result.name || 'anonymous') + ']';
+          resultType = 'function';
+        } else if (typeof result === 'object') {
+          try {
+            // Check for circular references and complex objects
+            const seen = new WeakSet();
+            serializedValue = JSON.parse(JSON.stringify(result, (key, value) => {
+              if (typeof value === 'object' && value !== null) {
+                if (seen.has(value)) {
+                  return '[Circular]';
+                }
+                seen.add(value);
+              }
+              if (typeof value === 'function') {
+                return '[Function]';
+              }
+              if (value instanceof Element) {
+                return '[Element: ' + value.tagName + ']';
+              }
+              return value;
+            }));
+            resultType = Array.isArray(result) ? 'array' : 'object';
+          } catch (e) {
+            serializedValue = String(result);
+            resultType = 'object (non-serializable)';
+          }
+        } else {
+          serializedValue = result;
+        }
+
+        return {
+          success: true,
+          value: serializedValue,
+          type: resultType,
+        };
+      } catch (e) {
+        return {
+          success: false,
+          error: e.message || String(e),
+        };
+      }
+    },
+
     getNodeBindingInfo(node) {
       if (!node) return null;
 

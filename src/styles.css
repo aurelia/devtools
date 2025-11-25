@@ -1512,4 +1512,130 @@
   .interaction-empty--error {
     @apply border-red-300 dark:border-red-600 text-red-700 dark:text-red-300;
   }
+
+  /* Search Mode Toggle */
+  .search-mode-toggle {
+    @apply flex-shrink-0 px-2 py-1 text-xs font-medium rounded border border-gray-300 dark:border-gray-600
+           bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 cursor-pointer
+           hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors;
+    min-width: 42px;
+    text-align: center;
+  }
+
+  .search-input.has-mode-toggle {
+    padding-left: 8px;
+  }
+
+  /* Matched Property Badge */
+  .matched-property-badge {
+    @apply ml-1 text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40
+           text-amber-700 dark:text-amber-300 font-mono truncate max-w-24;
+  }
+
+  /* Details Header Actions */
+  .details-header {
+    @apply flex items-center justify-between;
+  }
+
+  .details-header-actions {
+    @apply flex items-center gap-1;
+  }
+
+  .export-button.copied {
+    @apply text-green-600 dark:text-green-400;
+  }
+
+  /* Copy Property Button */
+  .copy-property-button {
+    @apply flex-shrink-0 opacity-0 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700
+           text-gray-500 dark:text-gray-400 transition-all cursor-pointer border-none bg-transparent;
+    margin-left: auto;
+  }
+
+  .property-row:hover .copy-property-button {
+    @apply opacity-100;
+  }
+
+  .copy-property-button.copied {
+    @apply opacity-100 text-green-600 dark:text-green-400;
+  }
+
+  .property-main {
+    @apply flex items-center gap-1 flex-1 min-w-0;
+  }
+
+  /* Expression Evaluation Panel */
+  .expression-panel {
+    @apply mt-4 border-t border-gray-200 dark:border-gray-700 pt-3;
+  }
+
+  .expression-panel-toggle {
+    @apply flex items-center gap-2 w-full px-2 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300
+           bg-transparent border-none cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors;
+  }
+
+  .expression-panel-toggle .expand-icon {
+    @apply text-gray-500 dark:text-gray-400 transition-transform;
+  }
+
+  .expression-panel-toggle .expand-icon.expanded {
+    @apply rotate-90;
+  }
+
+  .expression-panel-content {
+    @apply mt-2 flex flex-col gap-2;
+  }
+
+  .expression-input-row {
+    @apply flex items-center gap-2;
+  }
+
+  .expression-input {
+    @apply flex-1 px-2 py-1.5 text-xs font-mono border border-gray-300 dark:border-gray-600
+           rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+           focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500;
+  }
+
+  .expression-history {
+    @apply flex flex-wrap items-center gap-1 text-xs;
+  }
+
+  .expression-history-label {
+    @apply text-gray-500 dark:text-gray-400;
+  }
+
+  .expression-history-item {
+    @apply px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300
+           hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer border-none font-mono text-xs truncate max-w-32;
+  }
+
+  .expression-result {
+    @apply border border-gray-200 dark:border-gray-700 rounded p-2 bg-gray-50 dark:bg-gray-800/50;
+  }
+
+  .expression-result-header {
+    @apply flex items-center gap-2 mb-1;
+  }
+
+  .expression-result-label {
+    @apply text-xs font-medium text-gray-700 dark:text-gray-300;
+  }
+
+  .expression-result-type {
+    @apply text-xs text-gray-500 dark:text-gray-400 font-mono;
+  }
+
+  .expression-clear-button {
+    @apply ml-auto px-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200
+           cursor-pointer border-none bg-transparent text-sm font-bold;
+  }
+
+  .expression-result-value {
+    @apply text-xs font-mono whitespace-pre-wrap text-gray-900 dark:text-gray-100
+           max-h-32 overflow-auto m-0;
+  }
+
+  .expression-error {
+    @apply text-xs text-red-600 dark:text-red-400;
+  }
 }

@@ -100,6 +100,13 @@
               </span>
             </div>
             <div class="search-container">
+              <button
+                class="search-mode-toggle"
+                click.trigger="cycleSearchMode()"
+                title="Search mode: ${searchMode} (click to cycle)"
+              >
+                ${searchModeLabel}
+              </button>
               <svg
                 class="search-icon"
                 width="14"
@@ -112,9 +119,9 @@
                 />
               </svg>
               <input
-                class="search-input"
+                class="search-input has-mode-toggle"
                 type="text"
-                placeholder="Search (MyComponent, my-component...)"
+                placeholder="${searchPlaceholder}"
                 value.bind="searchQuery"
                 input.trigger="filterComponents()"
               />
@@ -251,6 +258,11 @@
                     <span if.bind="item.node.type === 'custom-attribute'">@${item.node.name}</span>
                   </span>
                   <span
+                    if.bind="item.node.matchedProperty && searchQuery"
+                    class="matched-property-badge"
+                    title="Matched property: ${item.node.matchedProperty}"
+                  >.${item.node.matchedProperty}</span>
+                  <span
                     if.bind="item.node.data.kind === 'element' && item.node.data.info.customAttributesInfo.length"
                     class="component-badge"
                     >${item.node.data.info.customAttributesInfo.length}</span
@@ -331,6 +343,21 @@
                     @${selectedElement ? selectedElement.name : 'attribute'}
                   </span>
                 </span>
+              </div>
+              <div class="details-header-actions">
+                <button
+                  class="toolbar-button icon-only export-button ${isExportCopied ? 'copied' : ''}"
+                  click.trigger="exportComponentAsJson()"
+                  title="${isExportCopied ? 'Copied!' : 'Export state as JSON'}"
+                  aria-label="Export component state as JSON"
+                >
+                  <svg if.bind="!isExportCopied" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                  </svg>
+                  <svg if.bind="isExportCopied" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                  </svg>
+                </button>
               </div>
             </div>
 
@@ -425,6 +452,18 @@
                               focus.trigger="$event.target.select()"
                             />
                           </span>
+                          <button
+                            class="copy-property-button ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                            click.trigger="copyPropertyValue(row.property, $event)"
+                            title="${isPropertyCopied(row.property) ? 'Copied!' : 'Copy value'}"
+                          >
+                            <svg if.bind="!isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                            </svg>
+                            <svg if.bind="isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     </li>
@@ -510,6 +549,18 @@
                               focus.trigger="$event.target.select()"
                             />
                           </span>
+                          <button
+                            class="copy-property-button ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                            click.trigger="copyPropertyValue(row.property, $event)"
+                            title="${isPropertyCopied(row.property) ? 'Copied!' : 'Copy value'}"
+                          >
+                            <svg if.bind="!isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                            </svg>
+                            <svg if.bind="isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     </li>
@@ -595,6 +646,18 @@
                               focus.trigger="$event.target.select()"
                             />
                           </span>
+                          <button
+                            class="copy-property-button ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                            click.trigger="copyPropertyValue(row.property, $event)"
+                            title="${isPropertyCopied(row.property) ? 'Copied!' : 'Copy value'}"
+                          >
+                            <svg if.bind="!isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                            </svg>
+                            <svg if.bind="isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     </li>
@@ -725,6 +788,69 @@
                         </ul>
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Expression Evaluation Panel -->
+              <div class="expression-panel">
+                <button
+                  class="expression-panel-toggle"
+                  click.trigger="toggleExpressionPanel()"
+                >
+                  <svg
+                    width="8"
+                    height="8"
+                    viewBox="0 0 8 8"
+                    class="expand-icon ${isExpressionPanelOpen ? 'expanded' : ''}"
+                  >
+                    <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                  </svg>
+                  <span>Evaluate Expression</span>
+                </button>
+
+                <div class="expression-panel-content" if.bind="isExpressionPanelOpen">
+                  <div class="expression-input-row">
+                    <input
+                      type="text"
+                      class="expression-input"
+                      placeholder="this.property, this.method(), etc."
+                      value.bind="expressionInput"
+                      keydown.trigger="$event.code === 'Enter' ? evaluateExpression() : null"
+                    />
+                    <button
+                      class="toolbar-button"
+                      click.trigger="evaluateExpression()"
+                      disabled.bind="!expressionInput.trim()"
+                    >
+                      Run
+                    </button>
+                  </div>
+
+                  <div class="expression-history" if.bind="expressionHistory.length">
+                    <span class="expression-history-label">History:</span>
+                    <button
+                      repeat.for="expr of expressionHistory"
+                      class="expression-history-item"
+                      click.trigger="selectHistoryExpression(expr)"
+                      title="${expr}"
+                    >
+                      ${expr.length > 30 ? expr.substring(0, 30) + '...' : expr}
+                    </button>
+                  </div>
+
+                  <div class="expression-result" if.bind="expressionResult || expressionError">
+                    <div class="expression-result-header">
+                      <span class="expression-result-label">Result</span>
+                      <span class="expression-result-type" if.bind="expressionResultType">(${expressionResultType})</span>
+                      <button
+                        class="expression-clear-button"
+                        click.trigger="clearExpressionResult()"
+                        title="Clear result"
+                      >×</button>
+                    </div>
+                    <pre class="expression-result-value" if.bind="expressionResult">${expressionResult}</pre>
+                    <div class="expression-error" if.bind="expressionError">${expressionError}</div>
                   </div>
                 </div>
               </div>

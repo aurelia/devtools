@@ -58,6 +58,7 @@ describe('App core logic', () => {
     (app as any).selectedBreadcrumb = [];
     (app as any).selectedNodeType = 'custom-element';
     (app as any).searchQuery = '';
+    (app as any).searchMode = 'name';
     (app as any).viewMode = 'tree';
     (app as any).isElementPickerActive = false;
     (app as any).interactionLog = [];
