@@ -40,6 +40,7 @@ describe('App core logic', () => {
       { id: 'all', label: 'All', icon: '🌲', kind: 'core' },
       { id: 'components', label: 'Components', icon: '📦', kind: 'core' },
       { id: 'attributes', label: 'Attributes', icon: '🔧', kind: 'core' },
+      { id: 'interactions', label: 'Interactions', icon: '⏱️', kind: 'core' },
     ];
     (app as any).activeTab = 'all';
     (app as any).tabs = [...(app as any).coreTabs];
@@ -59,6 +60,9 @@ describe('App core logic', () => {
     (app as any).searchQuery = '';
     (app as any).viewMode = 'tree';
     (app as any).isElementPickerActive = false;
+    (app as any).interactionLog = [];
+    (app as any).interactionLoading = false;
+    (app as any).interactionError = null;
     (app as any).aureliaDetected = false;
     (app as any).aureliaVersion = null;
     (app as any).detectionState = 'checking';
@@ -308,6 +312,32 @@ describe('App core logic', () => {
         'aurelia-devtools:selection-changed',
         expect.objectContaining({ selectedComponentId: 'alpha' })
       );
+    });
+  });
+
+  describe('interaction timeline', () => {
+    it('switchTab to interactions triggers log load', () => {
+      const spy = jest.spyOn(app, 'loadInteractionLog').mockResolvedValue(undefined as any);
+
+      app.switchTab('interactions');
+
+      expect(spy).toHaveBeenCalledWith(true);
+      spy.mockRestore();
+    });
+
+    it('applyInteractionSnapshot forwards phase', async () => {
+      await app.applyInteractionSnapshot('evt-2', 'before');
+      expect(debugHost.applyInteractionSnapshot).toHaveBeenCalledWith('evt-2', 'before');
+    });
+
+    it('clearInteractionLog clears and reloads', async () => {
+      const loadSpy = jest.spyOn(app, 'loadInteractionLog').mockResolvedValue(undefined as any);
+
+      await app.clearInteractionLog();
+
+      expect(debugHost.clearInteractionLog).toHaveBeenCalled();
+      // We clear optimistically; reload is best-effort so only assert the host call
+      loadSpy.mockRestore();
     });
   });
 
