@@ -1,5 +1,17 @@
 <div id="au-dev-root" class="devtools-root ${isDarkTheme ? 'dark' : ''}">
-  <nav class="tab-bar">
+  <!-- Extension invalidated overlay -->
+  <div if.bind="extensionInvalidated" class="extension-invalidated-overlay">
+    <div class="extension-invalidated-content">
+      <div class="empty-icon">🔌</div>
+      <h3>Extension Disconnected</h3>
+      <p>
+        The Aurelia DevTools extension was disabled or updated.
+        Please close and reopen DevTools to restore functionality.
+      </p>
+    </div>
+  </div>
+
+  <nav class="tab-bar" if.bind="!extensionInvalidated">
     <button
       repeat.for="tab of tabs"
       class="tab-button ${activeTab === tab.id ? 'active' : ''}"
@@ -10,7 +22,7 @@
     </button>
   </nav>
 
-  <main class="devtools-main">
+  <main class="devtools-main" if.bind="!extensionInvalidated">
     <!-- Main Tab - Components / Attributes -->
     <div if.bind="!isExternalTabActive && activeTab !== 'interactions'" class="h-full flex flex-col">
       <div class="components-split-pane">
@@ -146,7 +158,7 @@
           </div>
 
           <div class="flex-1 overflow-y-auto">
-            <div if.bind="detectionState === 'checking'" class="empty-components">
+            <div if.bind="detectionState === 'checking' && !componentTree.length" class="empty-components">
               <div class="empty-icon">🔍</div>
               <h3>Looking for Aurelia...</h3>
               <p>

@@ -1832,4 +1832,41 @@
   .slot-empty-label {
     @apply ml-auto text-xs italic text-gray-400 dark:text-gray-500;
   }
+
+  /* Extension invalidated overlay */
+  .extension-invalidated-overlay {
+    @apply fixed inset-0 flex items-center justify-center;
+    background-color: var(--color-background);
+    z-index: 1000;
+  }
+
+  .dark .extension-invalidated-overlay {
+    background-color: var(--color-dark-background);
+  }
+
+  .extension-invalidated-content {
+    @apply flex flex-col items-center justify-center p-10 text-center max-w-md;
+  }
+
+  .extension-invalidated-content .empty-icon {
+    @apply text-6xl mb-4 opacity-60;
+  }
+
+  .extension-invalidated-content h3 {
+    @apply text-lg font-medium mb-3;
+    color: var(--color-foreground);
+  }
+
+  .dark .extension-invalidated-content h3 {
+    color: var(--color-dark-foreground);
+  }
+
+  .extension-invalidated-content p {
+    @apply text-sm leading-relaxed;
+    color: var(--color-muted-foreground);
+  }
+
+  .dark .extension-invalidated-content p {
+    color: var(--color-dark-muted-foreground);
+  }
 }

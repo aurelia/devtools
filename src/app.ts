@@ -81,6 +81,7 @@ export class App implements ICustomElementViewModel {
   aureliaDetected: boolean = false;
   aureliaVersion: number | null = null;
   detectionState: 'checking' | 'detected' | 'not-found' | 'disabled' = 'checking';
+  extensionInvalidated: boolean = false;
 
   private debugHost: DebugHost = resolve(DebugHost);
   private plat: IPlatform = resolve(IPlatform);
@@ -173,6 +174,9 @@ export class App implements ICustomElementViewModel {
   startDetectionPolling() {
     // Poll for detection state changes every 2 seconds
     setInterval(() => {
+      if (this.checkExtensionInvalidated()) {
+        return;
+      }
       this.checkDetectionState();
       if (this.detectionState === 'disabled') {
         return;
@@ -190,6 +194,19 @@ export class App implements ICustomElementViewModel {
       }
       this.refreshExternalPanels();
     }, 2000);
+  }
+
+  checkExtensionInvalidated(): boolean {
+    try {
+      if (!chrome?.runtime?.id) {
+        this.extensionInvalidated = true;
+        return true;
+      }
+    } catch {
+      this.extensionInvalidated = true;
+      return true;
+    }
+    return false;
   }
 
   recheckAurelia() {
