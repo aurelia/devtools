@@ -4,7 +4,7 @@ import {
   ICustomElementViewModel,
   IPlatform,
 } from 'aurelia';
-import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, EventInteractionRecord, ExternalPanelContext, ExternalPanelDefinition, ExternalPanelSnapshot, InteractionPhase, PluginDevtoolsResult, Property, PropertyChangeRecord, PropertySnapshot } from './shared/types';
+import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, ComputedPropertyInfo, DISnapshot, EventInteractionRecord, ExternalPanelContext, ExternalPanelDefinition, ExternalPanelSnapshot, InteractionPhase, LifecycleHooksSnapshot, PluginDevtoolsResult, Property, PropertyChangeRecord, PropertySnapshot, RouteSnapshot, SlotSnapshot } from './shared/types';
 import { resolve } from '@aurelia/kernel';
 
 export class App implements ICustomElementViewModel {
@@ -66,6 +66,13 @@ export class App implements ICustomElementViewModel {
   expressionError: string = '';
   expressionHistory: string[] = [];
   isExpressionPanelOpen: boolean = false;
+
+  // Enhanced component inspection
+  lifecycleHooks: LifecycleHooksSnapshot | null = null;
+  computedProperties: ComputedPropertyInfo[] = [];
+  dependencies: DISnapshot | null = null;
+  routeInfo: RouteSnapshot | null = null;
+  slotInfo: SlotSnapshot | null = null;
 
   // Copy feedback
   copiedPropertyId: string | null = null;
@@ -474,6 +481,72 @@ export class App implements ICustomElementViewModel {
     } catch (error) {
       console.warn('Clear interaction log failed', error);
     }
+  }
+
+  // Enhanced component inspection
+  async loadEnhancedInfo(): Promise<void> {
+    const componentKey = this.selectedElement?.key || this.selectedElement?.name;
+    if (!componentKey) {
+      this.clearEnhancedInfo();
+      return;
+    }
+
+    try {
+      const [hooks, computed, deps, route, slots] = await Promise.all([
+        this.debugHost.getLifecycleHooks(componentKey),
+        this.debugHost.getComputedProperties(componentKey),
+        this.debugHost.getDependencies(componentKey),
+        this.debugHost.getRouteInfo(componentKey),
+        this.debugHost.getSlotInfo(componentKey),
+      ]);
+
+      this.lifecycleHooks = hooks;
+      this.computedProperties = computed || [];
+      this.dependencies = deps;
+      this.routeInfo = route;
+      this.slotInfo = slots;
+    } catch (error) {
+      this.clearEnhancedInfo();
+    }
+  }
+
+  clearEnhancedInfo(): void {
+    this.lifecycleHooks = null;
+    this.computedProperties = [];
+    this.dependencies = null;
+    this.routeInfo = null;
+    this.slotInfo = null;
+  }
+
+  get implementedHooksCount(): number {
+    if (!this.lifecycleHooks?.hooks) return 0;
+    return this.lifecycleHooks.hooks.filter(h => h.implemented).length;
+  }
+
+  get totalHooksCount(): number {
+    if (!this.lifecycleHooks?.hooks) return 0;
+    return this.lifecycleHooks.hooks.length;
+  }
+
+  get hasRouteParams(): boolean {
+    return !!(this.routeInfo && (this.routeInfo.params.length > 0 || this.routeInfo.queryParams.length > 0));
+  }
+
+  get activeSlotCount(): number {
+    if (!this.slotInfo?.slots) return 0;
+    return this.slotInfo.slots.filter(s => s.hasContent).length;
+  }
+
+  get hasComputedProperties(): boolean {
+    return this.computedProperties.length > 0;
+  }
+
+  get hasDependencies(): boolean {
+    return !!(this.dependencies?.dependencies?.length);
+  }
+
+  get hasSlots(): boolean {
+    return !!(this.slotInfo?.slots?.length);
   }
 
   get hasInteractions(): boolean {
@@ -947,6 +1020,9 @@ export class App implements ICustomElementViewModel {
     if (componentKey) {
       this.debugHost.startPropertyWatching({ componentKey, pollInterval: 500 });
     }
+
+    // Load enhanced inspection data
+    this.loadEnhancedInfo();
 
     if (this.isExternalTabActive) {
       this.scheduleExternalPanelRefresh();

@@ -792,6 +792,134 @@
                 </div>
               </div>
 
+              <!-- Lifecycle Hooks Section -->
+              <div class="properties-section" if.bind="selectedElement && lifecycleHooks">
+                <div class="section-header">
+                  <span class="section-icon">🔄</span>
+                  <span class="section-title">Lifecycle Hooks</span>
+                  <span class="property-count">(${implementedHooksCount}/${totalHooksCount})</span>
+                  <span class="version-badge">v${lifecycleHooks.version}</span>
+                </div>
+                <div class="section-content">
+                  <div class="lifecycle-hooks-grid">
+                    <div
+                      repeat.for="hook of lifecycleHooks.hooks"
+                      class="lifecycle-hook-item ${hook.implemented ? 'implemented' : 'not-implemented'}"
+                      title="${hook.implemented ? 'Implemented' : 'Not implemented'}${hook.isAsync ? ' (async)' : ''}"
+                    >
+                      <span class="hook-indicator ${hook.implemented ? 'active' : 'inactive'}"></span>
+                      <span class="hook-name">${hook.name}</span>
+                      <span class="async-badge" if.bind="hook.isAsync && hook.implemented">async</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Computed Properties Section -->
+              <div class="properties-section" if.bind="selectedElement && hasComputedProperties">
+                <div class="section-header">
+                  <span class="section-icon">📐</span>
+                  <span class="section-title">Computed Properties</span>
+                  <span class="property-count">(${computedProperties.length})</span>
+                </div>
+                <div class="section-content">
+                  <ul class="properties-list">
+                    <li repeat.for="prop of computedProperties" class="property-item">
+                      <div class="property-row">
+                        <div class="property-main">
+                          <span class="property-name">${prop.name}</span>
+                          <span class="getter-setter-badge">
+                            <span if.bind="prop.hasGetter" class="badge-get">get</span>
+                            <span if.bind="prop.hasSetter" class="badge-set">set</span>
+                          </span>
+                          <span class="property-separator">:</span>
+                          <span class="property-value ${prop.type}">${prop.value}</span>
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Dependencies Section -->
+              <div class="properties-section" if.bind="selectedElement && hasDependencies">
+                <div class="section-header">
+                  <span class="section-icon">💉</span>
+                  <span class="section-title">Dependencies</span>
+                  <span class="property-count">(${dependencies.dependencies.length})</span>
+                </div>
+                <div class="section-content">
+                  <ul class="dependencies-list">
+                    <li repeat.for="dep of dependencies.dependencies" class="dependency-item">
+                      <span class="dependency-type-icon">
+                        <span if.bind="dep.type === 'service'">🔧</span>
+                        <span if.bind="dep.type === 'interface'">📋</span>
+                        <span if.bind="dep.type === 'token'">🎫</span>
+                        <span if.bind="dep.type === 'unknown'">❓</span>
+                      </span>
+                      <span class="dependency-name">${dep.name}</span>
+                      <span class="dependency-type-label">${dep.type}</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Route Information Section -->
+              <div class="properties-section" if.bind="selectedElement && (routeInfo?.currentRoute || hasRouteParams)">
+                <div class="section-header">
+                  <span class="section-icon">🛤️</span>
+                  <span class="section-title">Route Info</span>
+                  <span class="navigating-indicator" if.bind="routeInfo.isNavigating">⏳</span>
+                </div>
+                <div class="section-content">
+                  <div class="route-info-content">
+                    <div class="route-current" if.bind="routeInfo.currentRoute">
+                      <span class="route-label">Route:</span>
+                      <code class="route-path">${routeInfo.currentRoute}</code>
+                    </div>
+                    <div class="route-params" if.bind="routeInfo.params.length">
+                      <span class="route-label">Params:</span>
+                      <ul class="params-list">
+                        <li repeat.for="param of routeInfo.params" class="param-item">
+                          <span class="param-name">${param.name}</span>
+                          <span class="param-separator">=</span>
+                          <span class="param-value">${param.value}</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <div class="route-query" if.bind="routeInfo.queryParams.length">
+                      <span class="route-label">Query:</span>
+                      <ul class="params-list">
+                        <li repeat.for="param of routeInfo.queryParams" class="param-item">
+                          <span class="param-name">${param.name}</span>
+                          <span class="param-separator">=</span>
+                          <span class="param-value">${param.value}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Slot Content Section -->
+              <div class="properties-section" if.bind="selectedElement && hasSlots">
+                <div class="section-header">
+                  <span class="section-icon">📦</span>
+                  <span class="section-title">Slots</span>
+                  <span class="property-count">(${activeSlotCount}/${slotInfo.slots.length})</span>
+                </div>
+                <div class="section-content">
+                  <ul class="slots-list">
+                    <li repeat.for="slot of slotInfo.slots" class="slot-item ${slot.hasContent ? 'has-content' : 'empty'}">
+                      <span class="slot-indicator ${slot.hasContent ? 'active' : 'inactive'}"></span>
+                      <span class="slot-name">${slot.name}</span>
+                      <span class="slot-node-count" if.bind="slot.nodeCount >= 0">(${slot.nodeCount} nodes)</span>
+                      <span class="slot-empty-label" if.bind="!slot.hasContent">empty</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
               <!-- Expression Evaluation Panel -->
               <div class="expression-panel">
                 <button

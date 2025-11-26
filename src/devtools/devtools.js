@@ -746,6 +746,31 @@ function install(debugValueLookup) {
 
       return null;
     },
+
+    getLifecycleHooks: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      return extractLifecycleHooks(controller);
+    },
+
+    getComputedProperties: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      return extractComputedProperties(controller);
+    },
+
+    getDependencies: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      return extractDependencies(controller);
+    },
+
+    getRouteInfo: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      return extractRouteInfo(controller);
+    },
+
+    getSlotInfo: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      return extractSlotInfo(controller);
+    },
   };
 
   function installEventProxy() {
@@ -1504,6 +1529,298 @@ function install(debugValueLookup) {
     const elementKey = info && info.customElementInfo ? (info.customElementInfo.key || info.customElementInfo.name || '') : '';
     const attrKeys = (info && info.customAttributesInfo ? info.customAttributesInfo.map((attr) => attr && (attr.key || attr.name || '')).join('|') : '');
     return `${domPath}::${elementKey}::${attrKeys}`;
+  }
+
+  // Enhanced Component Inspection - Lifecycle Hooks
+  const V2_LIFECYCLE_HOOKS = ['define', 'hydrating', 'hydrated', 'created', 'binding', 'bound', 'attaching', 'attached', 'detaching', 'unbinding', 'dispose'];
+  const V1_LIFECYCLE_HOOKS = ['created', 'bind', 'attached', 'detached', 'unbind'];
+
+  function detectControllerVersion(controller) {
+    if (!controller) return 2;
+    if (controller.definition && controller.definition.key) return 2;
+    if (controller.behavior) return 1;
+    return 2;
+  }
+
+  function findControllerByKey(componentKey) {
+    if (!componentKey) return null;
+
+    const allElements = document.querySelectorAll('*');
+
+    for (const element of allElements) {
+      const auV2 = element['$au'];
+      if (auV2) {
+        const ce = auV2['au:resource:custom-element'];
+        if (ce) {
+          const key = ce.definition?.key || ce.definition?.name;
+          const name = ce.definition?.name;
+          if (key === componentKey || name === componentKey) {
+            return ce;
+          }
+        }
+
+        const attrKeys = Object.getOwnPropertyNames(auV2).filter(k =>
+          k.includes('custom-attribute') || (k.startsWith('au:resource:') && k !== 'au:resource:custom-element')
+        );
+        for (const attrKey of attrKeys) {
+          const attr = auV2[attrKey];
+          if (attr && attr.definition) {
+            const key = attr.definition.key || attr.definition.name;
+            if (key === componentKey) {
+              return attr;
+            }
+          }
+        }
+      }
+
+      const auV1 = element.au;
+      if (auV1) {
+        if (auV1.controller) {
+          const ctrl = auV1.controller;
+          const key = ctrl.behavior?.elementName || ctrl.behavior?.attributeName;
+          if (key === componentKey) {
+            return ctrl;
+          }
+        }
+
+        const tagName = element.tagName ? element.tagName.toLowerCase() : null;
+        for (const attrKey in auV1) {
+          if (attrKey !== 'controller' && attrKey !== tagName) {
+            const attr = auV1[attrKey];
+            if (attr && attr.behavior) {
+              const key = attr.behavior.attributeName || attr.behavior.elementName;
+              if (key === componentKey) {
+                return attr;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function extractLifecycleHooks(controller) {
+    if (!controller) return null;
+
+    try {
+      const version = detectControllerVersion(controller);
+      const hookNames = version === 1 ? V1_LIFECYCLE_HOOKS : V2_LIFECYCLE_HOOKS;
+      const viewModel = controller.viewModel || controller.bindingContext || controller;
+
+      if (!viewModel) return null;
+
+      const hooks = hookNames.map(name => {
+        const fn = viewModel[name];
+        const implemented = typeof fn === 'function';
+        let isAsync = false;
+
+        if (implemented) {
+          try {
+            const fnStr = fn.toString();
+            isAsync = fnStr.startsWith('async') || fnStr.includes('return new Promise') || fnStr.includes('.then(');
+          } catch {}
+        }
+
+        return { name, implemented, isAsync };
+      });
+
+      return { version, hooks };
+    } catch {
+      return null;
+    }
+  }
+
+  function extractComputedProperties(controller) {
+    if (!controller) return [];
+
+    try {
+      const viewModel = controller.viewModel || controller.bindingContext || controller;
+      if (!viewModel) return [];
+
+      const computed = [];
+      let proto = Object.getPrototypeOf(viewModel);
+
+      while (proto && proto !== Object.prototype) {
+        const descriptors = Object.getOwnPropertyDescriptors(proto);
+        for (const [name, desc] of Object.entries(descriptors)) {
+          if (name === 'constructor' || name.startsWith('_') || name.startsWith('$')) continue;
+          if (typeof desc.get !== 'function') continue;
+
+          let value, type = 'unknown';
+          try {
+            value = viewModel[name];
+            type = value === null ? 'null' : value === undefined ? 'undefined' : Array.isArray(value) ? 'array' : typeof value;
+            value = formatPreview(value);
+          } catch (e) {
+            value = '[Error]';
+            type = 'error';
+          }
+
+          computed.push({ name, value, type, hasGetter: true, hasSetter: !!desc.set });
+        }
+        proto = Object.getPrototypeOf(proto);
+      }
+
+      return computed;
+    } catch {
+      return [];
+    }
+  }
+
+  function extractKeyName(key) {
+    if (!key) return null;
+    if (typeof key === 'string') return key;
+    if (typeof key === 'function') return key.name || 'Anonymous';
+    if (typeof key === 'symbol') return key.description || 'Symbol';
+    if (key.key) return extractKeyName(key.key);
+    if (key.friendlyName) return key.friendlyName;
+    return String(key);
+  }
+
+  function inferDependencyType(key) {
+    if (!key) return 'unknown';
+
+    const keyStr = String(key);
+
+    if (typeof key === 'function' && key.name && key.name[0] === 'I' && key.name[1] === key.name[1].toUpperCase()) {
+      return 'interface';
+    }
+
+    if (keyStr.includes('Token') || keyStr.includes('KEY')) {
+      return 'token';
+    }
+
+    if (typeof key === 'function' && key.prototype) {
+      return 'service';
+    }
+
+    return 'unknown';
+  }
+
+  function extractDependencies(controller) {
+    if (!controller) return null;
+
+    try {
+      const version = detectControllerVersion(controller);
+      const deps = [];
+
+      if (version === 2) {
+        const Type = controller.definition?.Type;
+        if (Type && Type.inject) {
+          const injectKeys = Array.isArray(Type.inject) ? Type.inject : [Type.inject];
+          injectKeys.forEach(key => {
+            deps.push({
+              name: extractKeyName(key) || 'unknown',
+              key: String(key),
+              type: inferDependencyType(key)
+            });
+          });
+        }
+      }
+
+      if (version === 1) {
+        const Type = controller.behavior?.target;
+        if (Type && Type.inject) {
+          const injectKeys = Array.isArray(Type.inject) ? Type.inject : [Type.inject];
+          injectKeys.forEach(key => {
+            deps.push({
+              name: extractKeyName(key) || 'unknown',
+              key: String(key),
+              type: inferDependencyType(key)
+            });
+          });
+        }
+      }
+
+      return { dependencies: deps, containerDepth: 0 };
+    } catch {
+      return null;
+    }
+  }
+
+  function extractRouteInfo(controller) {
+    if (!controller) return null;
+
+    try {
+      const viewModel = controller.viewModel || controller.bindingContext;
+      const info = {
+        currentRoute: null,
+        params: [],
+        queryParams: [],
+        navigationId: null,
+        isNavigating: false
+      };
+
+      if (viewModel) {
+        if (viewModel.$params && typeof viewModel.$params === 'object') {
+          Object.entries(viewModel.$params).forEach(([k, v]) => {
+            info.params.push({ name: k, value: String(v) });
+          });
+        }
+
+        if (viewModel.activationParams && typeof viewModel.activationParams === 'object') {
+          Object.entries(viewModel.activationParams).forEach(([k, v]) => {
+            info.params.push({ name: k, value: String(v) });
+          });
+        }
+
+        if (viewModel.routeConfig) {
+          info.currentRoute = viewModel.routeConfig.route || viewModel.routeConfig.name || null;
+        }
+      }
+
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        urlParams.forEach((v, k) => {
+          info.queryParams.push({ name: k, value: v });
+        });
+      } catch {}
+
+      return info;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractSlotInfo(controller) {
+    if (!controller) return null;
+
+    try {
+      const slots = [];
+      const host = controller.host || (controller.view && controller.view.host);
+
+      if (host) {
+        const auSlots = host.querySelectorAll('au-slot');
+        auSlots.forEach(el => {
+          const name = el.getAttribute('name') || 'default';
+          slots.push({
+            name,
+            hasContent: el.childNodes.length > 0 || (el.textContent && el.textContent.trim().length > 0),
+            nodeCount: el.childNodes.length
+          });
+        });
+
+        const nativeSlots = host.querySelectorAll('slot');
+        nativeSlots.forEach(el => {
+          const name = el.getAttribute('name') || 'default';
+          const assigned = el.assignedNodes ? el.assignedNodes() : [];
+          slots.push({
+            name,
+            hasContent: assigned.length > 0,
+            nodeCount: assigned.length
+          });
+        });
+      }
+
+      return {
+        slots,
+        hasDefaultSlot: slots.some(s => s.name === 'default')
+      };
+    } catch {
+      return null;
+    }
   }
 
   return { hooks, debugValueLookup };

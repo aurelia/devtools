@@ -1,4 +1,4 @@
-import { AureliaComponentSnapshot, AureliaInfo, EventInteractionRecord, ExternalPanelSnapshot, IControllerInfo, InteractionPhase, Property, PropertyChangeRecord, PropertySnapshot, WatchOptions } from '../shared/types';
+import { AureliaComponentSnapshot, AureliaInfo, ComputedPropertyInfo, DISnapshot, EventInteractionRecord, ExternalPanelSnapshot, IControllerInfo, InteractionPhase, LifecycleHooksSnapshot, Property, PropertyChangeRecord, PropertySnapshot, RouteSnapshot, SlotSnapshot, WatchOptions } from '../shared/types';
 import { App } from './../app';
 import { ICustomElementViewModel } from 'aurelia';
 
@@ -1017,6 +1017,141 @@ export class DebugHost implements ICustomElementViewModel {
         const hasChanged = signature !== this.componentTreeSignature;
         this.componentTreeSignature = signature;
         resolve(hasChanged);
+      });
+    });
+  }
+
+  getLifecycleHooks(componentKey: string): Promise<LifecycleHooksSnapshot | null> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(null);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || typeof hook.getLifecycleHooks !== 'function') {
+              return null;
+            }
+            return hook.getLifecycleHooks(${JSON.stringify(componentKey)});
+          } catch (error) {
+            return null;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: LifecycleHooksSnapshot | null) => {
+        resolve(result);
+      });
+    });
+  }
+
+  getComputedProperties(componentKey: string): Promise<ComputedPropertyInfo[]> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve([]);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || typeof hook.getComputedProperties !== 'function') {
+              return [];
+            }
+            return hook.getComputedProperties(${JSON.stringify(componentKey)}) || [];
+          } catch (error) {
+            return [];
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: ComputedPropertyInfo[]) => {
+        resolve(Array.isArray(result) ? result : []);
+      });
+    });
+  }
+
+  getDependencies(componentKey: string): Promise<DISnapshot | null> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(null);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || typeof hook.getDependencies !== 'function') {
+              return null;
+            }
+            return hook.getDependencies(${JSON.stringify(componentKey)});
+          } catch (error) {
+            return null;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: DISnapshot | null) => {
+        resolve(result);
+      });
+    });
+  }
+
+  getRouteInfo(componentKey: string): Promise<RouteSnapshot | null> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(null);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || typeof hook.getRouteInfo !== 'function') {
+              return null;
+            }
+            return hook.getRouteInfo(${JSON.stringify(componentKey)});
+          } catch (error) {
+            return null;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: RouteSnapshot | null) => {
+        resolve(result);
+      });
+    });
+  }
+
+  getSlotInfo(componentKey: string): Promise<SlotSnapshot | null> {
+    return new Promise((resolve) => {
+      if (!(chrome && chrome.devtools)) {
+        resolve(null);
+        return;
+      }
+
+      const expression = `
+        (function() {
+          try {
+            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+            if (!hook || typeof hook.getSlotInfo !== 'function') {
+              return null;
+            }
+            return hook.getSlotInfo(${JSON.stringify(componentKey)});
+          } catch (error) {
+            return null;
+          }
+        })();
+      `;
+
+      chrome.devtools.inspectedWindow.eval(expression, (result: SlotSnapshot | null) => {
+        resolve(result);
       });
     });
   }

@@ -191,3 +191,57 @@ export interface WatchOptions {
   componentKey: string;
   pollInterval?: number;
 }
+
+export interface LifecycleHookInfo {
+  name: string;
+  implemented: boolean;
+  isAsync: boolean;
+}
+
+export interface LifecycleHooksSnapshot {
+  version: 1 | 2;
+  hooks: LifecycleHookInfo[];
+}
+
+export interface ComputedPropertyInfo {
+  name: string;
+  value: unknown;
+  type: string;
+  hasGetter: boolean;
+  hasSetter: boolean;
+}
+
+export interface DependencyInfo {
+  name: string;
+  key: string;
+  type: 'service' | 'token' | 'interface' | 'unknown';
+}
+
+export interface DISnapshot {
+  dependencies: DependencyInfo[];
+  containerDepth: number;
+}
+
+export interface RouteParamInfo {
+  name: string;
+  value: string;
+}
+
+export interface RouteSnapshot {
+  currentRoute: string | null;
+  params: RouteParamInfo[];
+  queryParams: RouteParamInfo[];
+  navigationId: string | null;
+  isNavigating: boolean;
+}
+
+export interface SlotInfo {
+  name: string;
+  hasContent: boolean;
+  nodeCount: number;
+}
+
+export interface SlotSnapshot {
+  slots: SlotInfo[];
+  hasDefaultSlot: boolean;
+}
