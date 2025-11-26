@@ -9,11 +9,24 @@ export function stubPlatform() {
 export function stubDebugHost(overrides: Partial<Record<string, any>> = {}) {
   return {
     getAllComponents: jest.fn().mockResolvedValue({ tree: [], flat: [] }),
+    getExternalPanelsSnapshot: jest.fn().mockResolvedValue({ version: 0, panels: [] }),
+    emitExternalPanelEvent: jest.fn().mockResolvedValue(true),
+    getInteractionLog: jest.fn().mockResolvedValue([]),
+    replayInteraction: jest.fn().mockResolvedValue(true),
+    applyInteractionSnapshot: jest.fn().mockResolvedValue(true),
+    clearInteractionLog: jest.fn().mockResolvedValue(true),
     updateValues: jest.fn(),
     highlightComponent: jest.fn(),
     unhighlightComponent: jest.fn(),
     startElementPicker: jest.fn(),
     stopElementPicker: jest.fn(),
+    startPropertyWatching: jest.fn(),
+    stopPropertyWatching: jest.fn(),
+    getPropertySnapshot: jest.fn().mockResolvedValue(null),
+    refreshSelectedComponent: jest.fn().mockResolvedValue(null),
+    checkComponentTreeChanges: jest.fn().mockResolvedValue(false),
+    attach: jest.fn(),
+    revealInElements: jest.fn(),
     ...overrides
   };
 }

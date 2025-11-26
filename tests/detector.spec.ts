@@ -12,6 +12,12 @@ describe('detector.ts', () => {
     delete (window as any).__AURELIA_DEVTOOLS_VERSION__;
     // @ts-ignore
     delete (window as any).__AURELIA_DEVTOOLS_DETECTION_STATE__;
+    // @ts-ignore
+    delete (window as any).__AURELIA_DEVTOOLS_DISABLED__;
+    // @ts-ignore
+    delete (window as any).__AURELIA_DEVTOOLS_DISABLE__;
+    // @ts-ignore
+    delete (window as any).AURELIA_DEVTOOLS_DISABLE;
   });
 
   async function importFresh() {
@@ -64,6 +70,16 @@ describe('detector.ts', () => {
     await importFresh();
     await new Promise(r => setTimeout(r, 1));
     expect((window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__).toBe(1);
+  });
+
+  it('honors global opt-out flag', async () => {
+    (window as any).__AURELIA_DEVTOOLS_DISABLED__ = true;
+    await importFresh();
+    window.dispatchEvent(new Event('au-started'));
+    await new Promise(r => setTimeout(r, 1));
+    expect((window as any).__AURELIA_DEVTOOLS_DETECTION_STATE__).toBe('disabled');
+    expect((window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__).toBeNull();
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
   });
 
   it('does not throw when chrome is missing', async () => {

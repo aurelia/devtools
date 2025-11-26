@@ -25,6 +25,21 @@ A browser extension for debugging Aurelia 1 and 2 applications. Features a top-l
  - **Elements Sidebar Integration**: Optional Aurelia sidebar in the Elements panel showing the selected node's Aurelia info
  - **Selection Sync**: Toggle to auto-sync the Aurelia panel selection with the Elements panel ($0). Includes a "Reveal in Elements" action
 
+### Binding expressions (Aurelia 1 & 2)
+- Every bindable/property row now shows an `expr: ...` badge when the value comes from a binding; this works for both Aurelia 1 and 2.
+- In the Inspector > Controller section you’ll see `bindings` (and `instructions` for v1) collections. Expand an item to inspect the binding record, including the original expression and, for member access, the resolved object so you can drill further.
+- If you don’t see expressions, expand the selected component’s `Controller` > `bindings` entry; each binding/instruction item carries the expression even when the property is a computed object.
+
+## Opting Out Of DevTools
+
+If you need to prevent the Aurelia DevTools from inspecting your application (v1 or v2), set any of the following **before** Aurelia bootstraps:
+
+- `window.__AURELIA_DEVTOOLS_DISABLED__ = true;` (aliases: `window.__AURELIA_DEVTOOLS_DISABLE__`, `window.AURELIA_DEVTOOLS_DISABLE`)
+- `<meta name="aurelia-devtools" content="disable">`
+- `data-aurelia-devtools="disable"` on the `<html>` element
+
+When present, the extension will skip installing hooks, ignore detection events, and the DevTools panel will display “Aurelia DevTools disabled.”
+
 ## Installation
 
 ### From Chrome Web Store
@@ -61,6 +76,84 @@ Install the latest Node.js and npm versions.
    - Reload the extension in `chrome://extensions`
    - Close and reopen Developer Tools (or Ctrl+R in the DevTools inspect window)
    - Refresh the target page if needed
+
+## Event-Driven DevTools Panels
+
+Extension authors can surface custom diagnostics by listening for (and dispatching) browser events. No registration helpers are required—just emit the right events from the inspected page.
+
+### 1. Publish Data
+
+Dispatch `aurelia-devtools-panel-data` with a detail payload whenever you have information to show. Each `id` becomes its own tab.
+
+```ts
+type DevtoolsPanelDetail = {
+  id: string;
+  label?: string;
+  icon?: string; // emoji or short text (<=4 chars)
+  description?: string;
+  order?: number;
+  summary?: string;
+  sections?: Array<{
+    title?: string;
+    description?: string;
+    rows?: Array<{ label?: string; value: unknown; format?: 'text' | 'code' | 'json'; hint?: string }>;
+    table?: { columns?: string[]; rows?: unknown[][] };
+  }>;
+  data?: unknown;
+  status?: 'ok' | 'empty' | 'error';
+  error?: string;
+};
+
+window.addEventListener('aurelia-devtools-ready', () => {
+  window.dispatchEvent(
+    new CustomEvent<DevtoolsPanelDetail>('aurelia-devtools-panel-data', {
+      detail: {
+        id: 'aurelia-store',
+        label: 'Store',
+        icon: '🧠',
+        summary: `Last action: ${window.store?.lastAction ?? 'n/a'}`,
+        sections: [
+          {
+            title: 'State',
+            rows: [{ label: 'snapshot', value: window.store?.state, format: 'json' }],
+          },
+        ],
+        data: window.store,
+      },
+    })
+  );
+});
+```
+
+### 2. Refresh On Demand
+
+When the DevTools user clicks the refresh button, the panel dispatches `aurelia-devtools:request-panel` with `{ id, context }`. Listen for that event to push updated data:
+
+```ts
+window.addEventListener('aurelia-devtools:request-panel', (event: CustomEvent<{ id: string; context: any }>) => {
+  if (event.detail.id !== 'aurelia-store') return;
+  const ctx = event.detail.context; // contains selection + Aurelia version info
+  // recompute payload (maybe using ctx.selectedDomPath)
+  window.dispatchEvent(new CustomEvent('aurelia-devtools-panel-data', { detail: buildStorePayload(ctx) }));
+});
+```
+
+### 3. Track Selection Changes
+
+DevTools emits `aurelia-devtools:selection-changed` with the same context object whenever the inspected component changes. Use it to correlate diagnostics with the current view-model:
+
+```ts
+window.addEventListener('aurelia-devtools:selection-changed', (event: CustomEvent<any>) => {
+  const { selectedComponentId, selectedDomPath } = event.detail;
+  // optional: update internal state or eagerly re-publish panel data
+});
+```
+
+### 4. Clean Up
+
+If your panel should disappear, dispatch `aurelia-devtools-panel-remove` with `{ id }`.
+
+This event-first approach keeps the surface area tiny (just listen and dispatch) while still giving DevTools everything it needs to render a rich tab per integration.
 
 ### Troubleshooting Development Issues
 - If you encounter "File not found" errors:

@@ -4,7 +4,7 @@ import {
   ICustomElementViewModel,
   IPlatform,
 } from 'aurelia';
-import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, Property } from './shared/types';
+import { IControllerInfo, AureliaComponentSnapshot, AureliaComponentTreeNode, AureliaInfo, ComputedPropertyInfo, DISnapshot, EventInteractionRecord, ExternalPanelContext, ExternalPanelDefinition, ExternalPanelSnapshot, InteractionPhase, LifecycleHooksSnapshot, PluginDevtoolsResult, Property, PropertyChangeRecord, PropertySnapshot, RouteSnapshot, SlotSnapshot } from './shared/types';
 import { resolve } from '@aurelia/kernel';
 
 export class App implements ICustomElementViewModel {
@@ -13,12 +13,19 @@ export class App implements ICustomElementViewModel {
   JSON = JSON;
 
   // Tab management
-  activeTab: 'all' | 'components' | 'attributes' = 'all';
-  tabs = [
-    { id: 'all', label: 'All', icon: '🌲' },
-    { id: 'components', label: 'Components', icon: '📦' },
-    { id: 'attributes', label: 'Attributes', icon: '🔧' },
+  private readonly coreTabs: DevtoolsTabDefinition[] = [
+    { id: 'all', label: 'All', icon: '🌲', kind: 'core' },
+    { id: 'components', label: 'Components', icon: '📦', kind: 'core' },
+    { id: 'attributes', label: 'Attributes', icon: '🔧', kind: 'core' },
+    { id: 'interactions', label: 'Interactions', icon: '⏱️', kind: 'core' },
   ];
+  activeTab: string = 'all';
+  tabs: DevtoolsTabDefinition[] = [...this.coreTabs];
+  externalTabs: DevtoolsTabDefinition[] = [];
+  externalPanels: Record<string, ExternalPanelDefinition> = {};
+  private externalPanelsVersion = 0;
+  private externalPanelLoading: Record<string, boolean> = {};
+  private externalRefreshHandle: ReturnType<typeof setTimeout> | null = null;
 
   // Inspector tab data
   selectedElement: IControllerInfo = undefined;
@@ -33,6 +40,7 @@ export class App implements ICustomElementViewModel {
   selectedBreadcrumb: ComponentNode[] = [];
   selectedComponentId: string = undefined;
   searchQuery: string = '';
+  searchMode: 'name' | 'property' | 'all' = 'name';
   isElementPickerActive: boolean = false;
   // Preference: follow Chrome Elements selection automatically
   followChromeSelection: boolean = true;
@@ -40,10 +48,40 @@ export class App implements ICustomElementViewModel {
   isRefreshing: boolean = false;
   propertyRowsRevision: number = 0;
 
+  // Interaction timeline
+  interactionLog: EventInteractionRecord[] = [];
+  interactionLoading: boolean = false;
+  interactionError: string | null = null;
+  private interactionSignature: string = '';
+  private runtimeInteractionListener: ((msg: any, sender: any) => void) | null = null;
+
+  // Property watching
+  private propertyChangeListener: ((msg: any, sender: any) => void) | null = null;
+  private treeChangeListener: ((msg: any, sender: any) => void) | null = null;
+
+  // Expression evaluation
+  expressionInput: string = '';
+  expressionResult: string = '';
+  expressionResultType: string = '';
+  expressionError: string = '';
+  expressionHistory: string[] = [];
+  isExpressionPanelOpen: boolean = false;
+
+  // Enhanced component inspection
+  lifecycleHooks: LifecycleHooksSnapshot | null = null;
+  computedProperties: ComputedPropertyInfo[] = [];
+  dependencies: DISnapshot | null = null;
+  routeInfo: RouteSnapshot | null = null;
+  slotInfo: SlotSnapshot | null = null;
+
+  // Copy feedback
+  copiedPropertyId: string | null = null;
+
   // Detection status
   aureliaDetected: boolean = false;
   aureliaVersion: number | null = null;
-  detectionState: 'checking' | 'detected' | 'not-found' = 'checking';
+  detectionState: 'checking' | 'detected' | 'not-found' | 'disabled' = 'checking';
+  extensionInvalidated: boolean = false;
 
   private debugHost: DebugHost = resolve(DebugHost);
   private plat: IPlatform = resolve(IPlatform);
@@ -71,6 +109,13 @@ export class App implements ICustomElementViewModel {
       }
     } catch {}
 
+    // Wire interaction push stream from content script
+    this.registerInteractionStream();
+
+    // Wire property and tree change streams
+    this.registerPropertyChangeStream();
+    this.registerTreeChangeStream();
+
     // Check detection state set by devtools.js
     this.checkDetectionState();
 
@@ -82,6 +127,7 @@ export class App implements ICustomElementViewModel {
 
     // Poll for detection state changes
     this.startDetectionPolling();
+    this.refreshExternalPanels();
   }
 
   get currentController() {
@@ -104,6 +150,11 @@ export class App implements ICustomElementViewModel {
                 this.aureliaVersion = result.version;
                 this.detectionState = 'detected';
                 break;
+              case 'disabled':
+                this.aureliaDetected = false;
+                this.aureliaVersion = null;
+                this.detectionState = 'disabled';
+                break;
               case 'not-found':
                 this.aureliaDetected = false;
                 this.aureliaVersion = null;
@@ -123,12 +174,39 @@ export class App implements ICustomElementViewModel {
   startDetectionPolling() {
     // Poll for detection state changes every 2 seconds
     setInterval(() => {
+      if (this.checkExtensionInvalidated()) {
+        return;
+      }
       this.checkDetectionState();
+      if (this.detectionState === 'disabled') {
+        return;
+      }
       // Keep trying to load until we find components, regardless of detection flags
       if (!this.allAureliaObjects?.length) {
         this.loadAllComponents();
+      } else {
+        // Check for tree changes and reload if changed
+        this.debugHost.checkComponentTreeChanges().then((hasChanged) => {
+          if (hasChanged) {
+            this.loadAllComponents();
+          }
+        });
       }
+      this.refreshExternalPanels();
     }, 2000);
+  }
+
+  checkExtensionInvalidated(): boolean {
+    try {
+      if (!chrome?.runtime?.id) {
+        this.extensionInvalidated = true;
+        return true;
+      }
+    } catch {
+      this.extensionInvalidated = true;
+      return true;
+    }
+    return false;
   }
 
   recheckAurelia() {
@@ -139,20 +217,209 @@ export class App implements ICustomElementViewModel {
   }
 
   // Tab management methods
-  switchTab(tabId: 'all' | 'components' | 'attributes') {
+  switchTab(tabId: string) {
     this.activeTab = tabId;
-    // Auto-refresh components when switching to any tab
-    this.loadAllComponents();
+    if (this.isComponentTab(tabId)) {
+      this.loadAllComponents();
+    } else if (tabId === 'interactions') {
+      this.loadInteractionLog(true);
+    } else {
+      this.refreshExternalPanels(true);
+      this.notifyExternalSelection();
+    }
+  }
+
+  get isExternalTabActive(): boolean {
+    return this.isExternalTab(this.activeTab);
+  }
+
+  get activeExternalIcon(): string {
+    return this.getActiveExternalPanel()?.icon || '🧩';
+  }
+
+  get activeExternalTitle(): string {
+    return this.getActiveExternalPanel()?.label || 'Inspector';
+  }
+
+  get activeExternalDescription(): string | undefined {
+    return this.getActiveExternalPanel()?.description;
+  }
+
+  get activeExternalResult(): PluginDevtoolsResult | undefined {
+    return this.getActiveExternalPanel();
+  }
+
+  get activeExternalError(): string | null {
+    const panel = this.getActiveExternalPanel();
+    if (!panel) {
+      return null;
+    }
+    return panel.status === 'error' ? panel.error || 'Panel error' : null;
+  }
+
+  get isActiveExternalLoading(): boolean {
+    const panelId = this.getExternalPanelIdFromTab(this.activeTab);
+    if (!panelId) {
+      return false;
+    }
+    return !!this.externalPanelLoading[panelId];
+  }
+
+  refreshActiveExternalTab() {
+    if (!this.isExternalTabActive) {
+      return;
+    }
+    this.requestExternalPanelRefresh();
+  }
+
+  private getActiveExternalPanel(): ExternalPanelDefinition | undefined {
+    const panelId = this.getExternalPanelIdFromTab(this.activeTab);
+    if (!panelId) {
+      return undefined;
+    }
+    return this.externalPanels[panelId];
+  }
+
+  private isCoreTab(tabId: string): tabId is CoreTabId {
+    return tabId === 'all' || tabId === 'components' || tabId === 'attributes' || tabId === 'interactions';
+  }
+
+  private isComponentTab(tabId: string): tabId is ComponentTabId {
+    return tabId === 'all' || tabId === 'components' || tabId === 'attributes';
+  }
+
+  private isExternalTab(tabId: string): boolean {
+    return !!this.getExternalPanelIdFromTab(tabId);
+  }
+
+  private getExternalPanelIdFromTab(tabId: string): string | null {
+    if (!tabId) {
+      return null;
+    }
+    if (tabId.startsWith('external:')) {
+      return tabId.slice('external:'.length);
+    }
+    const panel = this.externalTabs.find((tab) => tab.id === tabId && tab.panelId);
+    return panel?.panelId || null;
+  }
+
+  refreshExternalPanels(force = false): Promise<void> {
+    if (this.detectionState === 'disabled') {
+      return Promise.resolve();
+    }
+
+    return this.debugHost
+      .getExternalPanelsSnapshot()
+      .then((snapshot: ExternalPanelSnapshot) => {
+        if (!snapshot) {
+          return;
+        }
+        if (!force && snapshot.version === this.externalPanelsVersion) {
+          return;
+        }
+        this.externalPanelsVersion = snapshot.version;
+        this.applyExternalPanels(snapshot);
+      })
+      .catch((error) => {
+        console.warn('Failed to load external Aurelia panels', error);
+      });
+  }
+
+  private applyExternalPanels(snapshot: ExternalPanelSnapshot) {
+    const nextPanels: Record<string, ExternalPanelDefinition> = {};
+    const tabs = (snapshot.panels || [])
+      .filter((panel) => panel && panel.id)
+      .map((panel) => {
+        nextPanels[panel.id] = panel;
+        this.externalPanelLoading[panel.id] = false;
+        return {
+          id: `external:${panel.id}`,
+          label: panel.label || panel.id,
+          icon: panel.icon || '🧩',
+          kind: 'external' as const,
+          panelId: panel.id,
+          description: panel.description,
+          order: panel.order ?? 0,
+        };
+      })
+      .sort((a, b) => {
+        const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+        if (orderDiff !== 0) {
+          return orderDiff;
+        }
+        return a.label.localeCompare(b.label);
+      });
+
+    this.externalPanels = nextPanels;
+    this.externalTabs = tabs;
+    this.tabs = [...this.coreTabs, ...this.externalTabs];
+
+    if (!this.tabs.some((tab) => tab.id === this.activeTab)) {
+      this.activeTab = 'all';
+    }
+  }
+
+  private requestExternalPanelRefresh() {
+    if (this.detectionState === 'disabled') {
+      return;
+    }
+    const panelId = this.getExternalPanelIdFromTab(this.activeTab);
+    if (!panelId) {
+      return;
+    }
+    this.setExternalPanelLoading(panelId, true);
+    this.debugHost.emitExternalPanelEvent('aurelia-devtools:request-panel', {
+      id: panelId,
+      context: this.buildExternalPanelContext(),
+    });
+    this.scheduleExternalPanelRefresh();
+  }
+
+  private scheduleExternalPanelRefresh(delay = 150) {
+    if (this.externalRefreshHandle) {
+      clearTimeout(this.externalRefreshHandle);
+    }
+    this.externalRefreshHandle = setTimeout(() => {
+      this.refreshExternalPanels(true);
+      this.externalRefreshHandle = null;
+    }, delay);
+  }
+
+  private setExternalPanelLoading(panelId: string, isLoading: boolean) {
+    this.externalPanelLoading[panelId] = isLoading;
+  }
+
+  private buildExternalPanelContext(): ExternalPanelContext {
+    const selectedNode = this.selectedComponentId ? this.findComponentById(this.selectedComponentId) : null;
+    const selectedInfo = selectedNode ? selectedNode.data.info : null;
+
+    return {
+      selectedComponentId: this.selectedComponentId,
+      selectedNodeType: selectedNode?.type,
+      selectedDomPath: selectedNode?.domPath,
+      aureliaVersion: this.aureliaVersion,
+      selectedInfo,
+    };
+  }
+
+  private notifyExternalSelection() {
+    this.debugHost.emitExternalPanelEvent('aurelia-devtools:selection-changed', this.buildExternalPanelContext());
   }
 
   // Component discovery methods
   loadAllComponents(): Promise<void> {
+    if (this.detectionState === 'disabled') {
+      this.handleComponentSnapshot({ tree: [], flat: [] });
+      return Promise.resolve();
+    }
+
     return new Promise((resolve, reject) => {
       this.plat.queueMicrotask(() => {
         this.debugHost
           .getAllComponents()
           .then((snapshot) => {
             this.handleComponentSnapshot(snapshot);
+            this.refreshExternalPanels();
 
             const hasData = !!(snapshot?.tree?.length || snapshot?.flat?.length);
             if (hasData) {
@@ -169,6 +436,210 @@ export class App implements ICustomElementViewModel {
           });
       });
     });
+  }
+
+  // Interaction timeline
+  async loadInteractionLog(force = false, silent = false): Promise<void> {
+    if (this.interactionLoading && !force && !silent) return;
+
+    const previousSignature = this.interactionSignature;
+    if (!silent) {
+      this.interactionLoading = true;
+      this.interactionError = null;
+    }
+    try {
+      const log = await this.debugHost.getInteractionLog();
+      const sorted = Array.isArray(log)
+        ? [...log].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        : [];
+      const signature = sorted.map((e) => `${e.id}:${e.timestamp}`).join('|');
+      this.interactionSignature = signature;
+      if (signature !== previousSignature) {
+        this.interactionLog = sorted;
+      }
+    } catch (error) {
+      if (!silent) {
+        this.interactionError = (error as any)?.message || String(error);
+        this.interactionLog = [];
+      }
+    } finally {
+      if (!silent) {
+        this.interactionLoading = false;
+      }
+    }
+  }
+
+  async replayInteraction(id: string): Promise<void> {
+    if (!id) return;
+    try {
+      await this.debugHost.replayInteraction(id);
+    } catch (error) {
+      console.warn('Replay failed', error);
+    }
+  }
+
+  async applyInteractionSnapshot(id: string, phase: InteractionPhase): Promise<void> {
+    if (!id) return;
+    try {
+      await this.debugHost.applyInteractionSnapshot(id, phase);
+    } catch (error) {
+      console.warn('Apply snapshot failed', error);
+    }
+  }
+
+  async clearInteractionLog(): Promise<void> {
+    // Optimistically clear local log for immediate UI feedback
+    this.interactionLog = [];
+    this.interactionSignature = '';
+    this.interactionError = null;
+
+    try {
+      await this.debugHost.clearInteractionLog();
+    } catch (error) {
+      console.warn('Clear interaction log failed', error);
+    }
+  }
+
+  // Enhanced component inspection
+  async loadEnhancedInfo(): Promise<void> {
+    const componentKey = this.selectedElement?.key || this.selectedElement?.name;
+    if (!componentKey) {
+      this.clearEnhancedInfo();
+      return;
+    }
+
+    try {
+      const [hooks, computed, deps, route, slots] = await Promise.all([
+        this.debugHost.getLifecycleHooks(componentKey),
+        this.debugHost.getComputedProperties(componentKey),
+        this.debugHost.getDependencies(componentKey),
+        this.debugHost.getRouteInfo(componentKey),
+        this.debugHost.getSlotInfo(componentKey),
+      ]);
+
+      this.lifecycleHooks = hooks;
+      this.computedProperties = computed || [];
+      this.dependencies = deps;
+      this.routeInfo = route;
+      this.slotInfo = slots;
+    } catch (error) {
+      this.clearEnhancedInfo();
+    }
+  }
+
+  clearEnhancedInfo(): void {
+    this.lifecycleHooks = null;
+    this.computedProperties = [];
+    this.dependencies = null;
+    this.routeInfo = null;
+    this.slotInfo = null;
+  }
+
+  get implementedHooksCount(): number {
+    if (!this.lifecycleHooks?.hooks) return 0;
+    return this.lifecycleHooks.hooks.filter(h => h.implemented).length;
+  }
+
+  get totalHooksCount(): number {
+    if (!this.lifecycleHooks?.hooks) return 0;
+    return this.lifecycleHooks.hooks.length;
+  }
+
+  get hasRouteParams(): boolean {
+    return !!(this.routeInfo && (this.routeInfo.params.length > 0 || this.routeInfo.queryParams.length > 0));
+  }
+
+  get activeSlotCount(): number {
+    if (!this.slotInfo?.slots) return 0;
+    return this.slotInfo.slots.filter(s => s.hasContent).length;
+  }
+
+  get hasComputedProperties(): boolean {
+    return this.computedProperties.length > 0;
+  }
+
+  get hasDependencies(): boolean {
+    return !!(this.dependencies?.dependencies?.length);
+  }
+
+  get hasSlots(): boolean {
+    return !!(this.slotInfo?.slots?.length);
+  }
+
+  get hasInteractions(): boolean {
+    return Array.isArray(this.interactionLog) && this.interactionLog.length > 0;
+  }
+
+  get formattedInteractionLog(): EventInteractionRecord[] {
+    return this.interactionLog || [];
+  }
+
+  private registerInteractionStream() {
+    if (!(chrome?.runtime?.onMessage?.addListener)) return;
+    this.runtimeInteractionListener = (message: any) => {
+      if (message && message.type === 'au-devtools:interaction' && message.entry) {
+        this.handleIncomingInteraction(message.entry as EventInteractionRecord);
+      }
+    };
+    chrome.runtime.onMessage.addListener(this.runtimeInteractionListener);
+  }
+
+  private handleIncomingInteraction(entry: EventInteractionRecord) {
+    if (!entry || !entry.id) return;
+    const existing = this.interactionLog.find((e) => e.id === entry.id);
+    if (existing) return;
+    const next = [entry, ...(this.interactionLog || [])];
+    next.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    this.interactionLog = next;
+    this.interactionSignature = next.map((e) => `${e.id}:${e.timestamp}`).join('|');
+  }
+
+  private registerPropertyChangeStream() {
+    if (!(chrome?.runtime?.onMessage?.addListener)) return;
+    this.propertyChangeListener = (message: any) => {
+      if (message && message.type === 'au-devtools:property-change') {
+        this.onPropertyChanges(message.changes, message.snapshot);
+      }
+    };
+    chrome.runtime.onMessage.addListener(this.propertyChangeListener);
+  }
+
+  private registerTreeChangeStream() {
+    if (!(chrome?.runtime?.onMessage?.addListener)) return;
+    this.treeChangeListener = (message: any) => {
+      if (message && message.type === 'au-devtools:tree-change') {
+        this.loadAllComponents();
+      }
+    };
+    chrome.runtime.onMessage.addListener(this.treeChangeListener);
+  }
+
+  onPropertyChanges(changes: PropertyChangeRecord[], snapshot: PropertySnapshot) {
+    if (!changes || !changes.length || !this.selectedElement) return;
+
+    const selectedKey = this.selectedElement.key || this.selectedElement.name;
+    if (!selectedKey || snapshot?.componentKey !== selectedKey) return;
+
+    let hasUpdates = false;
+
+    for (const change of changes) {
+      const bindable = this.selectedElement.bindables?.find((b) => b.name === change.propertyName);
+      if (bindable) {
+        bindable.value = change.newValue;
+        hasUpdates = true;
+        continue;
+      }
+
+      const property = this.selectedElement.properties?.find((p) => p.name === change.propertyName);
+      if (property) {
+        property.value = change.newValue;
+        hasUpdates = true;
+      }
+    }
+
+    if (hasUpdates) {
+      this.refreshPropertyBindings();
+    }
   }
 
   // User-triggered refresh with spinner animation
@@ -202,6 +673,7 @@ export class App implements ICustomElementViewModel {
       if (existingNode) {
         this.applySelectionFromNode(existingNode);
       } else {
+        this.debugHost.stopPropertyWatching();
         this.selectedComponentId = undefined;
         this.selectedElement = undefined;
         this.selectedElementAttributes = undefined;
@@ -371,10 +843,14 @@ export class App implements ICustomElementViewModel {
   }
 
   get filteredComponentTreeByTab(): ComponentNode[] {
+    if (!this.isComponentTab(this.activeTab)) {
+      return [];
+    }
+
     // First apply tab filtering to the full tree
     let tabFilteredTree: ComponentNode[];
 
-    switch (this.activeTab) {
+    switch (this.activeTab as ComponentTabId) {
       case 'components':
         tabFilteredTree = this.filterTreeByType(this.componentTree, 'custom-element');
         break;
@@ -555,6 +1031,20 @@ export class App implements ICustomElementViewModel {
     } else {
       this.selectedBreadcrumb = [node];
     }
+
+    // Start watching the selected component for property changes
+    const componentKey = this.selectedElement?.key || this.selectedElement?.name;
+    if (componentKey) {
+      this.debugHost.startPropertyWatching({ componentKey, pollInterval: 500 });
+    }
+
+    // Load enhanced inspection data
+    this.loadEnhancedInfo();
+
+    if (this.isExternalTabActive) {
+      this.scheduleExternalPanelRefresh();
+    }
+    this.notifyExternalSelection();
   }
 
   private findNodePathById(nodeId: string): ComponentNode[] | null {
@@ -637,21 +1127,53 @@ export class App implements ICustomElementViewModel {
     query: string
   ): ComponentNode[] {
     const filtered: ComponentNode[] = [];
+    const lowerQuery = query.toLowerCase();
 
     for (const node of nodes) {
-      const matchesSearch =
-        node.name.toLowerCase().includes(query) ||
-        node.type.toLowerCase().includes(query);
+      let matchesSearch = false;
+      let matchedPropertyName: string | null = null;
 
-      // Filter children recursively
+      // Name-based search (with fuzzy matching)
+      if (this.searchMode === 'name' || this.searchMode === 'all') {
+        const queryVariants = getNamingVariants(query);
+        const nodeVariants = getNamingVariants(node.name);
+
+        // Exact substring match (highest priority)
+        const exactMatch = nodeVariants.some((variant) =>
+          queryVariants.some((q) => variant.includes(q))
+        );
+
+        // Fuzzy match (lower priority)
+        const isFuzzyMatch = fuzzyMatch(node.name.toLowerCase(), lowerQuery);
+
+        // Type match
+        const typeMatch = node.type.toLowerCase().includes(lowerQuery);
+
+        matchesSearch = exactMatch || isFuzzyMatch || typeMatch;
+      }
+
+      // Property value search
+      if ((this.searchMode === 'property' || this.searchMode === 'all') && !matchesSearch) {
+        const info = node.data.kind === 'element'
+          ? node.data.info.customElementInfo
+          : node.data.raw;
+
+        if (info) {
+          matchedPropertyName = this.searchInProperties(info, lowerQuery);
+          if (matchedPropertyName) {
+            matchesSearch = true;
+          }
+        }
+      }
+
       const filteredChildren = this.filterComponentTree(node.children, query);
 
-      // Include node if it matches or has matching children
       if (matchesSearch || filteredChildren.length > 0) {
         const filteredNode: ComponentNode = {
           ...node,
           children: filteredChildren,
-          expanded: filteredChildren.length > 0 || node.expanded, // Auto-expand if has matching children
+          expanded: filteredChildren.length > 0 || node.expanded,
+          matchedProperty: matchedPropertyName,
         };
         filtered.push(filteredNode);
       }
@@ -660,9 +1182,75 @@ export class App implements ICustomElementViewModel {
     return filtered;
   }
 
+  private searchInProperties(info: IControllerInfo, query: string): string | null {
+    const allProperties = [
+      ...(info.bindables || []),
+      ...(info.properties || []),
+    ];
+
+    for (const prop of allProperties) {
+      if (!prop) continue;
+
+      // Search in property name
+      if (prop.name?.toLowerCase().includes(query)) {
+        return prop.name;
+      }
+
+      // Search in property value
+      const valueStr = this.propertyValueToSearchString(prop.value);
+      if (valueStr.toLowerCase().includes(query)) {
+        return prop.name;
+      }
+    }
+
+    return null;
+  }
+
+  private propertyValueToSearchString(value: unknown): string {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return `[${value.length} items]`;
+    if (typeof value === 'object') {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return '[object]';
+      }
+    }
+    return String(value);
+  }
+
   clearSearch() {
     this.searchQuery = '';
     // Filtering automatically updates via the reactive getter
+  }
+
+  setSearchMode(mode: 'name' | 'property' | 'all') {
+    this.searchMode = mode;
+  }
+
+  cycleSearchMode() {
+    const modes: Array<'name' | 'property' | 'all'> = ['name', 'property', 'all'];
+    const currentIndex = modes.indexOf(this.searchMode);
+    this.searchMode = modes[(currentIndex + 1) % modes.length];
+  }
+
+  get searchModeLabel(): string {
+    switch (this.searchMode) {
+      case 'name': return 'Name';
+      case 'property': return 'Props';
+      case 'all': return 'All';
+    }
+  }
+
+  get searchPlaceholder(): string {
+    switch (this.searchMode) {
+      case 'name': return 'Search components...';
+      case 'property': return 'Search property values...';
+      case 'all': return 'Search names & properties...';
+    }
   }
 
   // Component highlighting methods
@@ -997,6 +1585,197 @@ export class App implements ICustomElementViewModel {
     delete property.originalValue;
   }
 
+  // Copy property value to clipboard
+  async copyPropertyValue(property: Property, event?: Event) {
+    event?.stopPropagation();
+
+    let valueToCopy: string;
+    if (property.value === null) {
+      valueToCopy = 'null';
+    } else if (property.value === undefined) {
+      valueToCopy = 'undefined';
+    } else if (typeof property.value === 'object') {
+      try {
+        valueToCopy = JSON.stringify(property.value, null, 2);
+      } catch {
+        valueToCopy = String(property.value);
+      }
+    } else {
+      valueToCopy = String(property.value);
+    }
+
+    try {
+      await navigator.clipboard.writeText(valueToCopy);
+      this.copiedPropertyId = `${property.name}-${property.debugId || ''}`;
+      setTimeout(() => {
+        this.copiedPropertyId = null;
+      }, 1500);
+    } catch (error) {
+      console.warn('Failed to copy to clipboard:', error);
+    }
+  }
+
+  isPropertyCopied(property: Property): boolean {
+    return this.copiedPropertyId === `${property.name}-${property.debugId || ''}`;
+  }
+
+  // Export component state as JSON
+  async exportComponentAsJson(copyToClipboard = true) {
+    if (!this.selectedElement) return;
+
+    const exportData = {
+      meta: {
+        name: this.selectedElement.name,
+        type: this.selectedNodeType,
+        key: this.selectedElement.key,
+        aliases: this.selectedElement.aliases,
+        exportedAt: new Date().toISOString(),
+      },
+      bindables: this.serializeProperties(this.selectedElement.bindables || []),
+      properties: this.serializeProperties(this.selectedElement.properties || []),
+      controller: this.selectedElement.controller
+        ? { properties: this.serializeProperties(this.selectedElement.controller.properties || []) }
+        : undefined,
+      customAttributes: this.selectedElementAttributes?.map(attr => ({
+        name: attr.name,
+        bindables: this.serializeProperties(attr.bindables || []),
+        properties: this.serializeProperties(attr.properties || []),
+      })) || [],
+    };
+
+    const jsonString = JSON.stringify(exportData, null, 2);
+
+    if (copyToClipboard) {
+      try {
+        await navigator.clipboard.writeText(jsonString);
+        this.copiedPropertyId = '__export__';
+        setTimeout(() => {
+          this.copiedPropertyId = null;
+        }, 1500);
+      } catch (error) {
+        console.warn('Failed to copy export to clipboard:', error);
+        this.downloadJson(jsonString, `${this.selectedElement.name || 'component'}-state.json`);
+      }
+    } else {
+      this.downloadJson(jsonString, `${this.selectedElement.name || 'component'}-state.json`);
+    }
+  }
+
+  get isExportCopied(): boolean {
+    return this.copiedPropertyId === '__export__';
+  }
+
+  private serializeProperties(properties: Property[]): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const prop of properties) {
+      if (prop && prop.name) {
+        result[prop.name] = {
+          value: prop.value,
+          type: prop.type,
+        };
+      }
+    }
+    return result;
+  }
+
+  private downloadJson(content: string, filename: string) {
+    const blob = new Blob([content], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Expression evaluation
+  toggleExpressionPanel() {
+    this.isExpressionPanelOpen = !this.isExpressionPanelOpen;
+  }
+
+  async evaluateExpression() {
+    const expression = this.expressionInput.trim();
+    if (!expression || !this.selectedElement) return;
+
+    this.expressionError = '';
+    this.expressionResult = '';
+    this.expressionResultType = '';
+
+    // Add to history if not duplicate
+    if (!this.expressionHistory.includes(expression)) {
+      this.expressionHistory = [expression, ...this.expressionHistory.slice(0, 9)];
+    }
+
+    const componentKey = this.selectedElement.key || this.selectedElement.name;
+    if (!componentKey) {
+      this.expressionError = 'No component selected';
+      return;
+    }
+
+    const code = `
+      (function() {
+        try {
+          var hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || !hook.evaluateInComponentContext) {
+            return { error: 'DevTools hook not available' };
+          }
+          var result = hook.evaluateInComponentContext(${JSON.stringify(componentKey)}, ${JSON.stringify(expression)});
+          return result;
+        } catch (e) {
+          return { error: e.message || String(e) };
+        }
+      })()
+    `;
+
+    if (chrome?.devtools?.inspectedWindow) {
+      chrome.devtools.inspectedWindow.eval(
+        code,
+        (result: any, isException?: any) => {
+          if (isException) {
+            this.expressionError = String(isException);
+            return;
+          }
+
+          if (result && result.error) {
+            this.expressionError = result.error;
+            return;
+          }
+
+          if (result && result.success) {
+            this.expressionResultType = result.type || typeof result.value;
+            try {
+              if (result.value === undefined) {
+                this.expressionResult = 'undefined';
+              } else if (result.value === null) {
+                this.expressionResult = 'null';
+              } else if (typeof result.value === 'object') {
+                this.expressionResult = JSON.stringify(result.value, null, 2);
+              } else {
+                this.expressionResult = String(result.value);
+              }
+            } catch {
+              this.expressionResult = String(result.value);
+            }
+          } else {
+            this.expressionError = 'Unknown response format';
+          }
+        }
+      );
+    }
+  }
+
+  selectHistoryExpression(expr: string) {
+    this.expressionInput = expr;
+  }
+
+  clearExpressionResult() {
+    this.expressionResult = '';
+    this.expressionResultType = '';
+    this.expressionError = '';
+  }
+
   refreshPropertyBindings() {
     // Force Aurelia to re-render property bindings by updating object references
     if (this.selectedElement) {
@@ -1167,6 +1946,7 @@ interface ComponentNode {
   data: ComponentNodeData;
   expanded: boolean;
   hasAttributes: boolean;
+  matchedProperty?: string | null;
 }
 
 type ComponentNodeData =
@@ -1187,8 +1967,63 @@ interface ComponentDisplayNode {
   depth: number;
 }
 
+type ComponentTabId = 'all' | 'components' | 'attributes';
+type CoreTabId = ComponentTabId | 'interactions';
+
+interface DevtoolsTabDefinition {
+  id: string;
+  label: string;
+  icon: string;
+  kind: 'core' | 'external';
+  panelId?: string;
+  description?: string;
+  order?: number;
+}
+
 export class StringifyValueConverter implements ValueConverterInstance {
   toView(value: unknown) {
     return JSON.stringify(value);
   }
+}
+
+function toKebabCase(str: string): string {
+  return str
+    .replace(/([a-z])([A-Z])/g, '$1-$2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase();
+}
+
+function toPascalCase(str: string): string {
+  return str
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join('');
+}
+
+function toCamelCase(str: string): string {
+  const pascal = toPascalCase(str);
+  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
+}
+
+function getNamingVariants(name: string): string[] {
+  const lower = name.toLowerCase();
+  const kebab = toKebabCase(name);
+  const pascal = toPascalCase(kebab);
+  const camel = toCamelCase(kebab);
+  const variants = new Set([lower, kebab.toLowerCase(), pascal.toLowerCase(), camel.toLowerCase()]);
+  return [...variants];
+}
+
+function fuzzyMatch(text: string, pattern: string): boolean {
+  if (!pattern || !text) return false;
+  if (pattern.length > text.length) return false;
+
+  let patternIdx = 0;
+  for (let i = 0; i < text.length && patternIdx < pattern.length; i++) {
+    if (text[i] === pattern[patternIdx]) {
+      patternIdx++;
+    }
+  }
+
+  return patternIdx === pattern.length;
 }

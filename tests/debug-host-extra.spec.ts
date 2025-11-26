@@ -64,4 +64,47 @@ describe('DebugHost additional behaviors', () => {
     (host as any).checkForPickedComponent();
     expect(consumer.onElementPicked).toHaveBeenCalled();
   });
+
+  it('getInteractionLog proxies through inspectedWindow', async () => {
+    const log = [{ id: 'evt-1', eventName: 'click' }];
+    ChromeTest.setEvalToReturn([{ result: log }]);
+
+    const result = await host.getInteractionLog();
+
+    expect(result).toEqual(log);
+    const evalArg = (chrome.devtools.inspectedWindow.eval as jest.Mock).mock.calls.pop()?.[0];
+    expect(evalArg).toContain('getInteractionLog');
+  });
+
+  it('replayInteraction delegates to hook', async () => {
+    ChromeTest.setEvalToReturn([{ result: true }]);
+
+    const ok = await host.replayInteraction('evt-1');
+
+    expect(ok).toBe(true);
+    const evalArg = (chrome.devtools.inspectedWindow.eval as jest.Mock).mock.calls.pop()?.[0];
+    expect(evalArg).toContain('replayInteraction');
+    expect(evalArg).toContain('evt-1');
+  });
+
+  it('applyInteractionSnapshot forwards phase', async () => {
+    ChromeTest.setEvalToReturn([{ result: true }]);
+
+    const ok = await host.applyInteractionSnapshot('evt-2', 'after');
+
+    expect(ok).toBe(true);
+    const evalArg = (chrome.devtools.inspectedWindow.eval as jest.Mock).mock.calls.pop()?.[0];
+    expect(evalArg).toContain('applyInteractionSnapshot');
+    expect(evalArg).toContain('after');
+  });
+
+  it('clearInteractionLog calls hook clear', async () => {
+    ChromeTest.setEvalToReturn([{ result: true }]);
+
+    const ok = await host.clearInteractionLog();
+
+    expect(ok).toBe(true);
+    const evalArg = (chrome.devtools.inspectedWindow.eval as jest.Mock).mock.calls.pop()?.[0];
+    expect(evalArg).toContain('clearInteractionLog');
+  });
 });

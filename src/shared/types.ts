@@ -14,6 +14,7 @@ export interface Property {
   isExpanded?: boolean;
   name: string;
   value: unknown;
+  expression?: string;
   expandedValue?: IControllerInfo;
 }
 
@@ -47,6 +48,90 @@ export interface AureliaComponentSnapshot {
   flat: AureliaInfo[];
 }
 
+export type InteractionPhase = 'before' | 'after';
+
+export interface EventInteractionRecord {
+  id: string;
+  eventName: string;
+  domPath?: string | null;
+  mode: 'delegate' | 'trigger' | 'capture' | 'navigation' | 'unknown';
+  timestamp: number;
+  duration?: number;
+  vmName?: string;
+  handlerName?: string;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  error?: string | null;
+  replayable?: boolean;
+  canApplySnapshot?: boolean;
+  target?: InteractionTargetHint;
+  eventInit?: Record<string, unknown>;
+  detail?: unknown;
+  stale?: boolean;
+}
+
+export interface InteractionTargetHint {
+  domPath?: string | null;
+  tagName?: string | null;
+  componentName?: string | null;
+  componentKey?: string | null;
+  componentType?: 'custom-element' | 'custom-attribute' | 'unknown';
+  href?: string | null;
+}
+
+export interface PluginDevtoolsTable {
+  columns?: string[];
+  rows?: unknown[][];
+}
+
+export interface PluginDevtoolsSectionRow {
+  label: string;
+  value: unknown;
+  format?: 'text' | 'code' | 'json';
+  hint?: string;
+}
+
+export interface PluginDevtoolsSection {
+  title?: string;
+  description?: string;
+  rows?: PluginDevtoolsSectionRow[];
+  table?: PluginDevtoolsTable;
+}
+
+export interface PluginDevtoolsResult {
+  status: 'ok' | 'empty' | 'error';
+  pluginId?: string;
+  title?: string;
+  summary?: string;
+  sections?: PluginDevtoolsSection[];
+  data?: unknown;
+  raw?: unknown;
+  table?: PluginDevtoolsTable;
+  error?: string;
+  timestamp?: number;
+}
+
+export interface ExternalPanelDefinition extends PluginDevtoolsResult {
+  id: string;
+  label: string;
+  icon?: string;
+  description?: string;
+  order?: number;
+}
+
+export interface ExternalPanelSnapshot {
+  version: number;
+  panels: ExternalPanelDefinition[];
+}
+
+export interface ExternalPanelContext extends Record<string, unknown> {
+  selectedComponentId?: string;
+  selectedNodeType?: 'custom-element' | 'custom-attribute';
+  selectedDomPath?: string;
+  aureliaVersion?: number | null;
+  selectedInfo?: AureliaInfo;
+}
+
 export interface AureliaHooks {
   currentAttributes: IComponentController[];
   currentElement: IComponentController;
@@ -60,6 +145,12 @@ export interface AureliaHooks {
   getExpandedDebugValueForId?: (
     id: string
   ) => Pick<IControllerInfo, 'properties'>;
+  getExternalPanelsSnapshot?: () => ExternalPanelSnapshot;
+  emitDevtoolsEvent?: (eventName: string, payload?: unknown) => boolean;
+  getInteractionLog?: () => EventInteractionRecord[];
+  replayInteraction?: (id: string) => boolean;
+  applyInteractionSnapshot?: (id: string, phase: InteractionPhase) => boolean;
+  clearInteractionLog?: () => boolean;
 }
 
 type DefaultPayload = {
@@ -71,4 +162,86 @@ type DefaultPayload = {
 export interface IMessages<T = DefaultPayload> {
   type: string;
   payload: T;
+}
+
+export interface PropertyChangeRecord {
+  componentKey: string;
+  propertyName: string;
+  propertyType: 'bindable' | 'property';
+  oldValue: unknown;
+  newValue: unknown;
+  timestamp: number;
+}
+
+export interface ComponentTreeChangeRecord {
+  type: 'added' | 'removed' | 'changed';
+  componentKey: string;
+  componentName: string;
+  timestamp: number;
+}
+
+export interface PropertySnapshot {
+  componentKey: string;
+  bindables: Array<{ name: string; value: unknown; type: string }>;
+  properties: Array<{ name: string; value: unknown; type: string }>;
+  timestamp: number;
+}
+
+export interface WatchOptions {
+  componentKey: string;
+  pollInterval?: number;
+}
+
+export interface LifecycleHookInfo {
+  name: string;
+  implemented: boolean;
+  isAsync: boolean;
+}
+
+export interface LifecycleHooksSnapshot {
+  version: 1 | 2;
+  hooks: LifecycleHookInfo[];
+}
+
+export interface ComputedPropertyInfo {
+  name: string;
+  value: unknown;
+  type: string;
+  hasGetter: boolean;
+  hasSetter: boolean;
+}
+
+export interface DependencyInfo {
+  name: string;
+  key: string;
+  type: 'service' | 'token' | 'interface' | 'unknown';
+}
+
+export interface DISnapshot {
+  dependencies: DependencyInfo[];
+  containerDepth: number;
+}
+
+export interface RouteParamInfo {
+  name: string;
+  value: string;
+}
+
+export interface RouteSnapshot {
+  currentRoute: string | null;
+  params: RouteParamInfo[];
+  queryParams: RouteParamInfo[];
+  navigationId: string | null;
+  isNavigating: boolean;
+}
+
+export interface SlotInfo {
+  name: string;
+  hasContent: boolean;
+  nodeCount: number;
+}
+
+export interface SlotSnapshot {
+  slots: SlotInfo[];
+  hasDefaultSlot: boolean;
 }

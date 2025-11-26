@@ -1,5 +1,17 @@
 <div id="au-dev-root" class="devtools-root ${isDarkTheme ? 'dark' : ''}">
-  <nav class="tab-bar">
+  <!-- Extension invalidated overlay -->
+  <div if.bind="extensionInvalidated" class="extension-invalidated-overlay">
+    <div class="extension-invalidated-content">
+      <div class="empty-icon">🔌</div>
+      <h3>Extension Disconnected</h3>
+      <p>
+        The Aurelia DevTools extension was disabled or updated.
+        Please close and reopen DevTools to restore functionality.
+      </p>
+    </div>
+  </div>
+
+  <nav class="tab-bar" if.bind="!extensionInvalidated">
     <button
       repeat.for="tab of tabs"
       class="tab-button ${activeTab === tab.id ? 'active' : ''}"
@@ -10,9 +22,9 @@
     </button>
   </nav>
 
-  <main class="devtools-main">
-    <!-- Main Tab - Split Pane Layout (All/Components/Attributes) -->
-    <div class="h-full flex flex-col">
+  <main class="devtools-main" if.bind="!extensionInvalidated">
+    <!-- Main Tab - Components / Attributes -->
+    <div if.bind="!isExternalTabActive && activeTab !== 'interactions'" class="h-full flex flex-col">
       <div class="components-split-pane">
         <!-- Left Panel - Component Tree -->
         <div class="components-tree-panel">
@@ -100,6 +112,13 @@
               </span>
             </div>
             <div class="search-container">
+              <button
+                class="search-mode-toggle"
+                click.trigger="cycleSearchMode()"
+                title="Search mode: ${searchMode} (click to cycle)"
+              >
+                ${searchModeLabel}
+              </button>
               <svg
                 class="search-icon"
                 width="14"
@@ -112,9 +131,9 @@
                 />
               </svg>
               <input
-                class="search-input"
+                class="search-input has-mode-toggle"
                 type="text"
-                placeholder="Search components..."
+                placeholder="${searchPlaceholder}"
                 value.bind="searchQuery"
                 input.trigger="filterComponents()"
               />
@@ -139,7 +158,7 @@
           </div>
 
           <div class="flex-1 overflow-y-auto">
-            <div if.bind="detectionState === 'checking'" class="empty-components">
+            <div if.bind="detectionState === 'checking' && !componentTree.length" class="empty-components">
               <div class="empty-icon">🔍</div>
               <h3>Looking for Aurelia...</h3>
               <p>
@@ -160,6 +179,15 @@
               >
                 Check Again
               </button>
+            </div>
+
+            <div if.bind="detectionState === 'disabled'" class="empty-components">
+              <div class="empty-icon">🛑</div>
+              <h3>Aurelia DevTools disabled</h3>
+              <p>
+                This application has opted out of Aurelia DevTools inspections.
+                Remove the opt-out flag on the page to re-enable the inspector.
+              </p>
             </div>
 
             <div if.bind="aureliaDetected && !componentTree.length" class="empty-components">
@@ -242,6 +270,11 @@
                     <span if.bind="item.node.type === 'custom-attribute'">@${item.node.name}</span>
                   </span>
                   <span
+                    if.bind="item.node.matchedProperty && searchQuery"
+                    class="matched-property-badge"
+                    title="Matched property: ${item.node.matchedProperty}"
+                  >.${item.node.matchedProperty}</span>
+                  <span
                     if.bind="item.node.data.kind === 'element' && item.node.data.info.customAttributesInfo.length"
                     class="component-badge"
                     >${item.node.data.info.customAttributesInfo.length}</span
@@ -323,6 +356,21 @@
                   </span>
                 </span>
               </div>
+              <div class="details-header-actions">
+                <button
+                  class="toolbar-button icon-only export-button ${isExportCopied ? 'copied' : ''}"
+                  click.trigger="exportComponentAsJson()"
+                  title="${isExportCopied ? 'Copied!' : 'Export state as JSON'}"
+                  aria-label="Export component state as JSON"
+                >
+                  <svg if.bind="!isExportCopied" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                  </svg>
+                  <svg if.bind="isExportCopied" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <div class="details-content">
@@ -386,6 +434,15 @@
                               >
                             </span>
 
+                            <span
+                              if.bind="row.property.expression && !row.property.isEditing"
+                              class="property-expression"
+                              title="Template expression using this property"
+                            >
+                              <span class="expression-label">used in:</span>
+                              <code class="expression-code">${row.property.expression}</code>
+                            </span>
+
                             <select
                               if.bind="row.property.isEditing && row.property.type === 'boolean'"
                               class="property-editor"
@@ -407,6 +464,18 @@
                               focus.trigger="$event.target.select()"
                             />
                           </span>
+                          <button
+                            class="copy-property-button ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                            click.trigger="copyPropertyValue(row.property, $event)"
+                            title="${isPropertyCopied(row.property) ? 'Copied!' : 'Copy value'}"
+                          >
+                            <svg if.bind="!isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                            </svg>
+                            <svg if.bind="isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     </li>
@@ -462,6 +531,15 @@
                               >
                             </span>
 
+                            <span
+                              if.bind="row.property.expression && !row.property.isEditing"
+                              class="property-expression"
+                              title="Template expression using this property"
+                            >
+                              <span class="expression-label">used in:</span>
+                              <code class="expression-code">${row.property.expression}</code>
+                            </span>
+
                             <select
                               if.bind="row.property.isEditing && row.property.type === 'boolean'"
                               class="property-editor"
@@ -483,6 +561,18 @@
                               focus.trigger="$event.target.select()"
                             />
                           </span>
+                          <button
+                            class="copy-property-button ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                            click.trigger="copyPropertyValue(row.property, $event)"
+                            title="${isPropertyCopied(row.property) ? 'Copied!' : 'Copy value'}"
+                          >
+                            <svg if.bind="!isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                            </svg>
+                            <svg if.bind="isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     </li>
@@ -538,6 +628,15 @@
                               >
                             </span>
 
+                            <span
+                              if.bind="row.property.expression && !row.property.isEditing"
+                              class="property-expression"
+                              title="Template expression using this property"
+                            >
+                              <span class="expression-label">used in:</span>
+                              <code class="expression-code">${row.property.expression}</code>
+                            </span>
+
                             <select
                               if.bind="row.property.isEditing && row.property.type === 'boolean'"
                               class="property-editor"
@@ -559,6 +658,18 @@
                               focus.trigger="$event.target.select()"
                             />
                           </span>
+                          <button
+                            class="copy-property-button ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                            click.trigger="copyPropertyValue(row.property, $event)"
+                            title="${isPropertyCopied(row.property) ? 'Copied!' : 'Copy value'}"
+                          >
+                            <svg if.bind="!isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                            </svg>
+                            <svg if.bind="isPropertyCopied(row.property)" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     </li>
@@ -617,6 +728,15 @@
                                   >
                                     <span if.bind="row.property.type === 'string'">"</span>${row.property.value}<span if.bind="row.property.type === 'string'">"</span>
                                   </span>
+
+                                  <span
+                                    if.bind="row.property.expression && !row.property.isEditing"
+                                    class="property-expression"
+                                    title="Template expression using this property"
+                                  >
+                                    <span class="expression-label">used in:</span>
+                                    <code class="expression-code">${row.property.expression}</code>
+                                  </span>
                                   <select if.bind="row.property.isEditing && row.property.type === 'boolean'" class="property-editor" value.bind="row.property.value ? 'true' : 'false'" change.trigger="saveProperty(row.property, $event.target.value)" blur.trigger="saveProperty(row.property, $event.target.value)">
                                     <option value="true">true</option>
                                     <option value="false">false</option>
@@ -660,6 +780,14 @@
                                   <span if.bind="!row.property.isEditing" class="property-value ${row.property.type} ${row.property.canEdit ? 'editable' : 'readonly'}" dblclick.trigger="row.property.canEdit ? editProperty(row.property) : null" title="${row.property.canEdit ? 'Double-click to edit' : 'Read-only property'}">
                                     <span if.bind="row.property.type === 'string'">"</span>${row.property.value}<span if.bind="row.property.type === 'string'">"</span>
                                   </span>
+                                  <span
+                                    if.bind="row.property.expression && !row.property.isEditing"
+                                    class="property-expression"
+                                    title="Template expression using this property"
+                                  >
+                                    <span class="expression-label">used in:</span>
+                                    <code class="expression-code">${row.property.expression}</code>
+                                  </span>
                                   <select if.bind="row.property.isEditing && row.property.type === 'boolean'" class="property-editor" value.bind="row.property.value ? 'true' : 'false'" change.trigger="saveProperty(row.property, $event.target.value)" blur.trigger="saveProperty(row.property, $event.target.value)">
                                     <option value="true">true</option>
                                     <option value="false">false</option>
@@ -675,7 +803,350 @@
                   </div>
                 </div>
               </div>
+
+              <!-- Lifecycle Hooks Section -->
+              <div class="properties-section" if.bind="selectedElement && lifecycleHooks">
+                <div class="section-header">
+                  <span class="section-icon">🔄</span>
+                  <span class="section-title">Lifecycle Hooks</span>
+                  <span class="property-count">(${implementedHooksCount}/${totalHooksCount})</span>
+                  <span class="version-badge">v${lifecycleHooks.version}</span>
+                </div>
+                <div class="section-content">
+                  <div class="lifecycle-hooks-grid">
+                    <div
+                      repeat.for="hook of lifecycleHooks.hooks"
+                      class="lifecycle-hook-item ${hook.implemented ? 'implemented' : 'not-implemented'}"
+                      title="${hook.implemented ? 'Implemented' : 'Not implemented'}${hook.isAsync ? ' (async)' : ''}"
+                    >
+                      <span class="hook-indicator ${hook.implemented ? 'active' : 'inactive'}"></span>
+                      <span class="hook-name">${hook.name}</span>
+                      <span class="async-badge" if.bind="hook.isAsync && hook.implemented">async</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Computed Properties Section -->
+              <div class="properties-section" if.bind="selectedElement && hasComputedProperties">
+                <div class="section-header">
+                  <span class="section-icon">📐</span>
+                  <span class="section-title">Computed Properties</span>
+                  <span class="property-count">(${computedProperties.length})</span>
+                </div>
+                <div class="section-content">
+                  <ul class="properties-list">
+                    <li repeat.for="prop of computedProperties" class="property-item">
+                      <div class="property-row">
+                        <div class="property-main">
+                          <span class="property-name">${prop.name}</span>
+                          <span class="getter-setter-badge">
+                            <span if.bind="prop.hasGetter" class="badge-get">get</span>
+                            <span if.bind="prop.hasSetter" class="badge-set">set</span>
+                          </span>
+                          <span class="property-separator">:</span>
+                          <span class="property-value ${prop.type}">${prop.value}</span>
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Dependencies Section -->
+              <div class="properties-section" if.bind="selectedElement && hasDependencies">
+                <div class="section-header">
+                  <span class="section-icon">💉</span>
+                  <span class="section-title">Dependencies</span>
+                  <span class="property-count">(${dependencies.dependencies.length})</span>
+                </div>
+                <div class="section-content">
+                  <ul class="dependencies-list">
+                    <li repeat.for="dep of dependencies.dependencies" class="dependency-item">
+                      <span class="dependency-type-icon">
+                        <span if.bind="dep.type === 'service'">🔧</span>
+                        <span if.bind="dep.type === 'interface'">📋</span>
+                        <span if.bind="dep.type === 'token'">🎫</span>
+                        <span if.bind="dep.type === 'unknown'">❓</span>
+                      </span>
+                      <span class="dependency-name">${dep.name}</span>
+                      <span class="dependency-type-label">${dep.type}</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Route Information Section -->
+              <div class="properties-section" if.bind="selectedElement && (routeInfo?.currentRoute || hasRouteParams)">
+                <div class="section-header">
+                  <span class="section-icon">🛤️</span>
+                  <span class="section-title">Route Info</span>
+                  <span class="navigating-indicator" if.bind="routeInfo.isNavigating">⏳</span>
+                </div>
+                <div class="section-content">
+                  <div class="route-info-content">
+                    <div class="route-current" if.bind="routeInfo.currentRoute">
+                      <span class="route-label">Route:</span>
+                      <code class="route-path">${routeInfo.currentRoute}</code>
+                    </div>
+                    <div class="route-params" if.bind="routeInfo.params.length">
+                      <span class="route-label">Params:</span>
+                      <ul class="params-list">
+                        <li repeat.for="param of routeInfo.params" class="param-item">
+                          <span class="param-name">${param.name}</span>
+                          <span class="param-separator">=</span>
+                          <span class="param-value">${param.value}</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <div class="route-query" if.bind="routeInfo.queryParams.length">
+                      <span class="route-label">Query:</span>
+                      <ul class="params-list">
+                        <li repeat.for="param of routeInfo.queryParams" class="param-item">
+                          <span class="param-name">${param.name}</span>
+                          <span class="param-separator">=</span>
+                          <span class="param-value">${param.value}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Slot Content Section -->
+              <div class="properties-section" if.bind="selectedElement && hasSlots">
+                <div class="section-header">
+                  <span class="section-icon">📦</span>
+                  <span class="section-title">Slots</span>
+                  <span class="property-count">(${activeSlotCount}/${slotInfo.slots.length})</span>
+                </div>
+                <div class="section-content">
+                  <ul class="slots-list">
+                    <li repeat.for="slot of slotInfo.slots" class="slot-item ${slot.hasContent ? 'has-content' : 'empty'}">
+                      <span class="slot-indicator ${slot.hasContent ? 'active' : 'inactive'}"></span>
+                      <span class="slot-name">${slot.name}</span>
+                      <span class="slot-node-count" if.bind="slot.nodeCount >= 0">(${slot.nodeCount} nodes)</span>
+                      <span class="slot-empty-label" if.bind="!slot.hasContent">empty</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Expression Evaluation Panel -->
+              <div class="expression-panel">
+                <button
+                  class="expression-panel-toggle"
+                  click.trigger="toggleExpressionPanel()"
+                >
+                  <svg
+                    width="8"
+                    height="8"
+                    viewBox="0 0 8 8"
+                    class="expand-icon ${isExpressionPanelOpen ? 'expanded' : ''}"
+                  >
+                    <path d="M2 2 L6 4 L2 6 Z" fill="currentColor" />
+                  </svg>
+                  <span>Evaluate Expression</span>
+                </button>
+
+                <div class="expression-panel-content" if.bind="isExpressionPanelOpen">
+                  <div class="expression-input-row">
+                    <input
+                      type="text"
+                      class="expression-input"
+                      placeholder="this.property, this.method(), etc."
+                      value.bind="expressionInput"
+                      keydown.trigger="$event.code === 'Enter' ? evaluateExpression() : null"
+                    />
+                    <button
+                      class="toolbar-button"
+                      click.trigger="evaluateExpression()"
+                      disabled.bind="!expressionInput.trim()"
+                    >
+                      Run
+                    </button>
+                  </div>
+
+                  <div class="expression-history" if.bind="expressionHistory.length">
+                    <span class="expression-history-label">History:</span>
+                    <button
+                      repeat.for="expr of expressionHistory"
+                      class="expression-history-item"
+                      click.trigger="selectHistoryExpression(expr)"
+                      title="${expr}"
+                    >
+                      ${expr.length > 30 ? expr.substring(0, 30) + '...' : expr}
+                    </button>
+                  </div>
+
+                  <div class="expression-result" if.bind="expressionResult || expressionError">
+                    <div class="expression-result-header">
+                      <span class="expression-result-label">Result</span>
+                      <span class="expression-result-type" if.bind="expressionResultType">(${expressionResultType})</span>
+                      <button
+                        class="expression-clear-button"
+                        click.trigger="clearExpressionResult()"
+                        title="Clear result"
+                      >×</button>
+                    </div>
+                    <pre class="expression-result-value" if.bind="expressionResult">${expressionResult}</pre>
+                    <div class="expression-error" if.bind="expressionError">${expressionError}</div>
+                  </div>
+                </div>
+              </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Interaction timeline -->
+    <div if.bind="!isExternalTabActive && activeTab === 'interactions'" class="interaction-panel">
+      <div class="interaction-header">
+        <div class="interaction-header-left">
+          <div class="interaction-title">Interaction Timeline</div>
+          <div class="interaction-subtitle">
+            Captured delegate/trigger events with before/after snapshots. Applying snapshots overwrites the component's view-model state.
+          </div>
+        </div>
+        <div class="interaction-actions">
+          <button class="toolbar-button" click.trigger="loadInteractionLog(true)" disabled.bind="interactionLoading">
+            ${interactionLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button class="toolbar-button" click.trigger="clearInteractionLog()" disabled.bind="interactionLoading || !hasInteractions">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div if.bind="interactionError" class="interaction-empty interaction-empty--error">
+        <div class="empty-icon">⚠️</div>
+        <p>Failed to load interactions: ${interactionError}</p>
+        <button class="refresh-button" click.trigger="loadInteractionLog(true)">Retry</button>
+      </div>
+
+      <div if.bind="interactionLoading && !interactionError" class="interaction-empty">
+        <div class="empty-icon">⏳</div>
+        <p>Loading recent interactions…</p>
+      </div>
+
+      <div if.bind="!interactionLoading && !interactionError && !hasInteractions" class="interaction-empty">
+        <div class="empty-icon">🕑</div>
+        <p>No interactions captured yet. Trigger actions in the app to see them here.</p>
+        <button class="refresh-button" click.trigger="loadInteractionLog(true)">Refresh</button>
+      </div>
+
+      <div if.bind="hasInteractions && !interactionLoading && !interactionError" class="interaction-list">
+        <div repeat.for="entry of formattedInteractionLog" class="interaction-row">
+          <div class="interaction-meta">
+            <div class="interaction-event">
+              <span class="interaction-event-name">${entry.eventName}</span>
+              <span class="interaction-mode">${entry.mode || 'delegate'}</span>
+              <span class="interaction-duration" if.bind="entry.duration">· ${entry.duration}ms</span>
+            </div>
+            <div class="interaction-context">
+              <span if.bind="entry.vmName">${entry.vmName}</span>
+              <span if.bind="entry.handlerName">· ${entry.handlerName}</span>
+              <span>· ${new Date(entry.timestamp).toLocaleTimeString()}</span>
+            </div>
+            <div class="interaction-path" if.bind="entry.domPath">
+              ${entry.domPath}
+            </div>
+            <div class="interaction-router" if.bind="entry.mode === 'navigation'">
+              <span if.bind="entry.detail?.from">from: ${entry.detail.from}</span>
+              <span if.bind="entry.detail?.to">→ ${entry.detail.to}</span>
+              <span if.bind="entry.detail?.trigger">(${entry.detail.trigger || entry.detail.source || 'router'})</span>
+              <span if.bind="entry.detail?.id">#${entry.detail.id}</span>
+            </div>
+            <div class="interaction-error" if.bind="entry.error">
+              ⚠️ ${entry.error}
+            </div>
+          </div>
+          <div class="interaction-commands">
+            <button class="toolbar-button" click.trigger="clearInteractionLog()" disabled.bind="interactionLoading || !hasInteractions">
+              Clear
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div if.bind="isExternalTabActive" class="plugin-panel">
+      <div class="plugin-panel-header">
+        <div class="plugin-panel-title">
+          <span class="plugin-panel-icon">${activeExternalIcon}</span>
+          <div class="plugin-panel-copy">
+            <h2 class="plugin-panel-heading">${activeExternalTitle}</h2>
+            <p class="plugin-panel-description" if.bind="activeExternalDescription">${activeExternalDescription}</p>
+          </div>
+        </div>
+        <div class="plugin-panel-actions">
+          <button
+            class="toolbar-button"
+            click.trigger="refreshActiveExternalTab()"
+            disabled.bind="isActiveExternalLoading"
+          >
+            ${isActiveExternalLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+      <div class="plugin-panel-body">
+        <div if.bind="isActiveExternalLoading" class="plugin-state plugin-state--loading">
+          <div class="empty-icon">⏳</div>
+          <p>Loading panel data…</p>
+        </div>
+        <div if.bind="!isActiveExternalLoading && activeExternalError" class="plugin-state plugin-state--error">
+          <div class="empty-icon">⚠️</div>
+          <p>${activeExternalError}</p>
+          <button class="refresh-button" click.trigger="refreshActiveExternalTab()">Try Again</button>
+        </div>
+        <div if.bind="!isActiveExternalLoading && !activeExternalError && !activeExternalResult" class="plugin-state plugin-state--empty">
+          <div class="empty-icon">🧩</div>
+          <p>No panel data available yet.</p>
+          <button class="refresh-button" click.trigger="refreshActiveExternalTab()">Refresh</button>
+        </div>
+        <div if.bind="activeExternalResult && !isActiveExternalLoading && !activeExternalError" class="plugin-content">
+          <div class="plugin-summary" if.bind="activeExternalResult.summary">
+            ${activeExternalResult.summary}
+          </div>
+          <div class="plugin-sections" if.bind="activeExternalResult.sections && activeExternalResult.sections.length">
+            <section repeat.for="section of activeExternalResult.sections" class="plugin-section">
+              <div class="plugin-section-header">
+                <h3>${section.title || 'Details'}</h3>
+                <p if.bind="section.description">${section.description}</p>
+              </div>
+              <dl class="plugin-rows" if.bind="section.rows && section.rows.length">
+                <div repeat.for="row of section.rows" class="plugin-row">
+                  <dt>
+                    ${row.label || 'Value'}
+                    <span class="plugin-row-hint" if.bind="row.hint">${row.hint}</span>
+                  </dt>
+                  <dd>
+                    <pre if.bind="row.format === 'json'">${JSON.stringify(row.value, null, 2)}</pre>
+                    <code if.bind="row.format === 'code'">${row.value}</code>
+                    <span if.bind="!row.format || row.format === 'text'">${row.value}</span>
+                  </dd>
+                </div>
+              </dl>
+              <div class="plugin-table-wrapper" if.bind="section.table && section.table.rows && section.table.rows.length">
+                <table class="plugin-table">
+                  <thead if.bind="section.table.columns && section.table.columns.length">
+                    <tr>
+                      <th repeat.for="col of section.table.columns">${col}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr repeat.for="row of section.table.rows">
+                      <td repeat.for="cell of row">${cell}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+          <div class="plugin-json" if.bind="activeExternalResult.data">
+            <h3>Data</h3>
+            <pre>${JSON.stringify(activeExternalResult.data, null, 2)}</pre>
           </div>
         </div>
       </div>

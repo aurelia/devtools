@@ -71,4 +71,18 @@ describe('DebugHost', () => {
     const code2 = (chrome.devtools.inspectedWindow.eval as jest.Mock).mock.calls[0][0];
     expect(code2).toContain("querySelectorAll('.aurelia-devtools-highlight')");
   });
+
+  it('getExternalPanelsSnapshot returns fallback when hook unavailable', async () => {
+    ChromeTest.setEvalToReturn([{ result: { version: 0, panels: [] } }]);
+    const snapshot = await host.getExternalPanelsSnapshot();
+    expect(snapshot).toEqual({ version: 0, panels: [] });
+  });
+
+  it('emitExternalPanelEvent proxies to inspected window', async () => {
+    ChromeTest.setEvalToReturn([{ result: true }]);
+    const ok = await host.emitExternalPanelEvent('aurelia-devtools:request-panel', { selectedComponentId: 'alpha' });
+    expect(ok).toBe(true);
+    const evalCode = (chrome.devtools.inspectedWindow.eval as jest.Mock).mock.calls.pop()?.[0];
+    expect(evalCode).toContain('emitDevtoolsEvent');
+  });
 });

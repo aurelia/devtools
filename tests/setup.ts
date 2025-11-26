@@ -39,9 +39,7 @@ const onNavigated = mkEvent();
 
 const inspectedWindowEval = jest.fn();
 
-/** Global chrome mock */
-// @ts-ignore
-global.chrome = {
+const createChromeMock = () => ({
   runtime: {
     onMessage,
     sendMessage: jest.fn(),
@@ -67,7 +65,11 @@ global.chrome = {
     setTitle: jest.fn(),
     setPopup: jest.fn()
   }
-};
+});
+
+/** Global chrome mock */
+// @ts-ignore
+global.chrome = createChromeMock();
 
 /** Utilities to interact with mocks in tests */
 export const ChromeTest = {
@@ -77,10 +79,14 @@ export const ChromeTest = {
   triggerSelectionChanged: () => onSelectionChanged._trigger(),
   triggerNavigated: (url: string = 'http://localhost/') => onNavigated._trigger(url),
   setEvalImplementation: (impl: (expression: string, callback: (result: any, exception?: any) => void) => void) => {
-    (global as any).chrome.devtools.inspectedWindow.eval.mockImplementation(impl);
+    if ((global as any).chrome?.devtools?.inspectedWindow?.eval) {
+      (global as any).chrome.devtools.inspectedWindow.eval.mockImplementation(impl);
+    }
   },
   setEvalToReturn: (values: { result?: any; exception?: any }[]) => {
-    // Queue multiple sequential behaviors; each call shifts one behavior
+    if (!(global as any).chrome?.devtools?.inspectedWindow?.eval) {
+      return;
+    }
     const queue = values.slice();
     (global as any).chrome.devtools.inspectedWindow.eval.mockImplementation((_expr: string, cb: Function) => {
       const next = queue.length ? queue.shift()! : { result: undefined, exception: undefined };
@@ -92,14 +98,16 @@ export const ChromeTest = {
     onMessage._clear();
     onSelectionChanged._clear();
     onNavigated._clear();
-    (global as any).chrome.devtools.inspectedWindow.eval.mockReset();
+    if ((global as any).chrome?.devtools?.inspectedWindow?.eval?.mockReset) {
+      (global as any).chrome.devtools.inspectedWindow.eval.mockReset();
+    }
   },
   removeChrome: () => {
-    // simulate absence of chrome APIs
-    // @ts-expect-error
-    delete (global as any).chrome;
+    (global as any).chrome = undefined;
   },
   restoreChrome: () => {
-    // no-op for this simple mutable mock
+    if (!(global as any).chrome) {
+      (global as any).chrome = createChromeMock();
+    }
   }
 };

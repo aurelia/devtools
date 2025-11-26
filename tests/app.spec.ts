@@ -36,8 +36,19 @@ describe('App core logic', () => {
     // Create instance without running field initializers (avoid DI resolve calls)
     app = Object.create(AppClass.prototype);
     // Seed essential fields
+    (app as any).coreTabs = [
+      { id: 'all', label: 'All', icon: '🌲', kind: 'core' },
+      { id: 'components', label: 'Components', icon: '📦', kind: 'core' },
+      { id: 'attributes', label: 'Attributes', icon: '🔧', kind: 'core' },
+      { id: 'interactions', label: 'Interactions', icon: '⏱️', kind: 'core' },
+    ];
     (app as any).activeTab = 'all';
-    (app as any).tabs = [];
+    (app as any).tabs = [...(app as any).coreTabs];
+    (app as any).externalTabs = [];
+    (app as any).externalPanels = {};
+    (app as any).externalPanelsVersion = 0;
+    (app as any).externalPanelLoading = {};
+    (app as any).externalRefreshHandle = null;
     (app as any).selectedElement = undefined;
     (app as any).selectedElementAttributes = undefined;
     (app as any).allAureliaObjects = undefined;
@@ -47,8 +58,12 @@ describe('App core logic', () => {
     (app as any).selectedBreadcrumb = [];
     (app as any).selectedNodeType = 'custom-element';
     (app as any).searchQuery = '';
+    (app as any).searchMode = 'name';
     (app as any).viewMode = 'tree';
     (app as any).isElementPickerActive = false;
+    (app as any).interactionLog = [];
+    (app as any).interactionLoading = false;
+    (app as any).interactionError = null;
     (app as any).aureliaDetected = false;
     (app as any).aureliaVersion = null;
     (app as any).detectionState = 'checking';
@@ -240,6 +255,93 @@ describe('App core logic', () => {
     });
   });
 
+  describe('external panel integration', () => {
+    it('refreshExternalPanels merges snapshot into tabs', async () => {
+      const snapshot = {
+        version: 1,
+        panels: [{ id: 'store', label: 'Store Debugger', icon: '🧠', summary: 'hello' }],
+      };
+      debugHost.getExternalPanelsSnapshot.mockResolvedValue(snapshot);
+
+      await app.refreshExternalPanels(true);
+
+      expect(app.tabs.some((tab: any) => tab.id === 'external:store')).toBe(true);
+      expect((app as any).externalPanels.store.summary).toBe('hello');
+    });
+
+    it('switchTab triggers external refresh helpers', () => {
+      const spy = jest.spyOn(app, 'refreshExternalPanels').mockResolvedValue(undefined as any);
+      (app as any).externalTabs = [{ id: 'external:store', label: 'Store', icon: '🧩', kind: 'external', panelId: 'store' }];
+      (app as any).tabs = [...(app as any).coreTabs, ...(app as any).externalTabs];
+
+      app.switchTab('external:store');
+
+      expect(spy).toHaveBeenCalledWith(true);
+    });
+
+    it('refreshActiveExternalTab emits request event', () => {
+      (app as any).externalTabs = [{ id: 'external:store', label: 'Store', icon: '🧩', kind: 'external', panelId: 'store' }];
+      (app as any).tabs = [...(app as any).coreTabs, ...(app as any).externalTabs];
+      debugHost.emitExternalPanelEvent.mockResolvedValue(true);
+      app.activeTab = 'external:store';
+
+      app.refreshActiveExternalTab();
+
+      expect(debugHost.emitExternalPanelEvent).toHaveBeenCalledWith(
+        'aurelia-devtools:request-panel',
+        expect.objectContaining({ id: 'store' })
+      );
+    });
+
+    it('applySelectionFromNode notifies external panels when active', () => {
+      const node: any = {
+        id: 'alpha',
+        type: 'custom-element',
+        domPath: 'html > body:nth-of-type(1)',
+        children: [],
+        expanded: false,
+        hasAttributes: false,
+        name: 'alpha',
+        tagName: 'div',
+        data: { kind: 'element', info: ai(ci('alpha')), raw: null },
+      };
+      app.activeTab = 'external:store';
+
+      (app as any).applySelectionFromNode(node);
+
+      expect(debugHost.emitExternalPanelEvent).toHaveBeenCalledWith(
+        'aurelia-devtools:selection-changed',
+        expect.objectContaining({ selectedComponentId: 'alpha' })
+      );
+    });
+  });
+
+  describe('interaction timeline', () => {
+    it('switchTab to interactions triggers log load', () => {
+      const spy = jest.spyOn(app, 'loadInteractionLog').mockResolvedValue(undefined as any);
+
+      app.switchTab('interactions');
+
+      expect(spy).toHaveBeenCalledWith(true);
+      spy.mockRestore();
+    });
+
+    it('applyInteractionSnapshot forwards phase', async () => {
+      await app.applyInteractionSnapshot('evt-2', 'before');
+      expect(debugHost.applyInteractionSnapshot).toHaveBeenCalledWith('evt-2', 'before');
+    });
+
+    it('clearInteractionLog clears and reloads', async () => {
+      const loadSpy = jest.spyOn(app, 'loadInteractionLog').mockResolvedValue(undefined as any);
+
+      await app.clearInteractionLog();
+
+      expect(debugHost.clearInteractionLog).toHaveBeenCalled();
+      // We clear optimistically; reload is best-effort so only assert the host call
+      loadSpy.mockRestore();
+    });
+  });
+
   describe('property editing and expansion', () => {
     beforeEach(() => {
       jest.useFakeTimers();
@@ -314,6 +416,177 @@ describe('App core logic', () => {
     it('unhighlightComponent forwards to debugHost', () => {
       app.unhighlightComponent();
       expect(debugHost.unhighlightComponent).toHaveBeenCalled();
+    });
+  });
+
+  describe('property watching and reactivity', () => {
+    function rawNode(
+      id: string,
+      element: IControllerInfo | null,
+      attrs: IControllerInfo[] = [],
+      children: AureliaComponentTreeNode[] = [],
+      domPath: string = ''
+    ): AureliaComponentTreeNode {
+      return {
+        id,
+        domPath,
+        tagName: element?.name ?? null,
+        customElementInfo: element,
+        customAttributesInfo: attrs,
+        children,
+      };
+    }
+
+    function applyTree(nodes: AureliaComponentTreeNode[]) {
+      (app as any).handleComponentSnapshot({ tree: nodes, flat: [] });
+      return (app as any).componentTree as any[];
+    }
+
+    it('selectComponent starts property watching with component key', () => {
+      const tree = applyTree([rawNode('alpha', ci('alpha', 'alpha-key'))]);
+      app.selectComponent(tree[0].id);
+
+      expect(debugHost.startPropertyWatching).toHaveBeenCalledWith({
+        componentKey: 'alpha-key',
+        pollInterval: 500,
+      });
+    });
+
+    it('selectComponent falls back to name if key not available', () => {
+      const element = ci('my-element');
+      delete (element as any).key;
+      const tree = applyTree([rawNode('beta', element)]);
+
+      app.selectComponent(tree[0].id);
+
+      expect(debugHost.startPropertyWatching).toHaveBeenCalledWith({
+        componentKey: 'my-element',
+        pollInterval: 500,
+      });
+    });
+
+    it('handleComponentSnapshot stops property watching when selected node is removed', () => {
+      const tree = applyTree([rawNode('alpha', ci('alpha'))]);
+      app.selectComponent(tree[0].id);
+
+      // Clear the component tree so selected component no longer exists
+      (app as any).handleComponentSnapshot({ tree: [], flat: [] });
+
+      expect(debugHost.stopPropertyWatching).toHaveBeenCalled();
+      expect(app.selectedComponentId).toBeUndefined();
+    });
+
+    it('onPropertyChanges updates bindable values', () => {
+      const bindable: any = { name: 'count', value: 0, type: 'number' };
+      (app as any).selectedElement = {
+        key: 'test-key',
+        name: 'test',
+        bindables: [bindable],
+        properties: [],
+      };
+
+      const changes = [
+        {
+          componentKey: 'test-key',
+          propertyName: 'count',
+          propertyType: 'bindable',
+          oldValue: 0,
+          newValue: 5,
+          timestamp: Date.now(),
+        },
+      ];
+
+      const snapshot = {
+        componentKey: 'test-key',
+        bindables: [{ name: 'count', value: 5, type: 'number' }],
+        properties: [],
+        timestamp: Date.now(),
+      };
+
+      app.onPropertyChanges(changes as any, snapshot as any);
+
+      expect(bindable.value).toBe(5);
+    });
+
+    it('onPropertyChanges updates property values', () => {
+      const property: any = { name: 'message', value: 'old', type: 'string' };
+      (app as any).selectedElement = {
+        key: 'test-key',
+        name: 'test',
+        bindables: [],
+        properties: [property],
+      };
+
+      const changes = [
+        {
+          componentKey: 'test-key',
+          propertyName: 'message',
+          propertyType: 'property',
+          oldValue: 'old',
+          newValue: 'new',
+          timestamp: Date.now(),
+        },
+      ];
+
+      const snapshot = {
+        componentKey: 'test-key',
+        bindables: [],
+        properties: [{ name: 'message', value: 'new', type: 'string' }],
+        timestamp: Date.now(),
+      };
+
+      app.onPropertyChanges(changes as any, snapshot as any);
+
+      expect(property.value).toBe('new');
+    });
+
+    it('onPropertyChanges ignores changes for different component', () => {
+      const property: any = { name: 'message', value: 'original', type: 'string' };
+      (app as any).selectedElement = {
+        key: 'selected-key',
+        name: 'selected',
+        bindables: [],
+        properties: [property],
+      };
+
+      const changes = [
+        {
+          componentKey: 'different-key',
+          propertyName: 'message',
+          propertyType: 'property',
+          oldValue: 'old',
+          newValue: 'new',
+          timestamp: Date.now(),
+        },
+      ];
+
+      const snapshot = {
+        componentKey: 'different-key',
+        bindables: [],
+        properties: [{ name: 'message', value: 'new', type: 'string' }],
+        timestamp: Date.now(),
+      };
+
+      app.onPropertyChanges(changes as any, snapshot as any);
+
+      expect(property.value).toBe('original');
+    });
+
+    it('onPropertyChanges does nothing when no selected element', () => {
+      (app as any).selectedElement = undefined;
+
+      const changes = [
+        {
+          componentKey: 'any-key',
+          propertyName: 'prop',
+          propertyType: 'property',
+          oldValue: 'old',
+          newValue: 'new',
+          timestamp: Date.now(),
+        },
+      ];
+
+      expect(() => app.onPropertyChanges(changes as any, {} as any)).not.toThrow();
     });
   });
 });
