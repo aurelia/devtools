@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => {
         targets: [
           { src: 'src/popups', dest: 'dist' },
           { src: 'images', dest: 'dist' },
-          { src: 'index.html', dest: 'dist' },
+          { src: 'sidebar.html', dest: 'dist' },
           { src: 'manifest.json', dest: 'dist' },
           { src: 'src/devtools', dest: 'dist' },
         ],
@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => {
       minify: false,
       rollupOptions: {
         input: {
-          'build/entry': resolve(__dirname, 'src/main.ts'),
+          'build/sidebar': resolve(__dirname, 'src/sidebar/main.ts'),
           'build/detector': resolve(__dirname, 'src/detector/detector.ts'),
           'build/background': resolve(__dirname, 'src/background/background.ts'),
           'build/contentscript': resolve(__dirname, 'src/contentscript/contentscript.ts'),

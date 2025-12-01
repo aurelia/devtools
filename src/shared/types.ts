@@ -222,6 +222,45 @@ export interface DISnapshot {
   containerDepth: number;
 }
 
+export interface ContainerInfo {
+  id: number;
+  depth: number;
+  isRoot: boolean;
+  registrationCount: number;
+  ownerName?: string;
+}
+
+export interface EnhancedDependencyInfo {
+  name: string;
+  key: string;
+  type: 'service' | 'token' | 'interface' | 'unknown';
+  containerDepth: number;
+  containerInfo: ContainerInfo | null;
+  resolvedValue?: unknown;
+  resolvedType?: string;
+  instanceName?: string;
+  instancePreview?: Record<string, unknown>;
+}
+
+export interface ContainerHierarchy {
+  current: ContainerInfo;
+  ancestors: ContainerInfo[];
+}
+
+export interface AvailableService {
+  name: string;
+  key: string;
+  type: 'service' | 'token' | 'interface' | 'resource' | 'unknown';
+  isFromAncestor: boolean;
+}
+
+export interface EnhancedDISnapshot {
+  version: 2;
+  dependencies: EnhancedDependencyInfo[];
+  containerHierarchy: ContainerHierarchy | null;
+  availableServices: AvailableService[];
+}
+
 export interface RouteParamInfo {
   name: string;
   value: string;
@@ -244,4 +283,85 @@ export interface SlotInfo {
 export interface SlotSnapshot {
   slots: SlotInfo[];
   hasDefaultSlot: boolean;
+}
+
+export interface ComponentTreeNode {
+  key: string;
+  name: string;
+  tagName: string;
+  type: 'custom-element' | 'custom-attribute';
+  hasChildren: boolean;
+  childCount: number;
+  isExpanded?: boolean;
+  children?: ComponentTreeNode[];
+}
+
+export interface ComponentTreeRow {
+  node: ComponentTreeNode;
+  depth: number;
+}
+
+export interface TimelineEvent {
+  id: string;
+  type: 'property-change' | 'lifecycle' | 'interaction';
+  componentKey: string;
+  componentName: string;
+  timestamp: number;
+  detail: string;
+  data?: Record<string, unknown>;
+}
+
+// Template Debugger Types
+export type BindingMode = 'oneTime' | 'toView' | 'fromView' | 'twoWay' | 'default';
+
+export interface TemplateBinding {
+  id: string;
+  type: 'property' | 'attribute' | 'interpolation' | 'listener' | 'ref' | 'let';
+  expression: string;
+  target: string;
+  value: unknown;
+  valueType: string;
+  mode?: BindingMode;
+  isBound: boolean;
+}
+
+export interface RepeatItem {
+  index: number;
+  key?: string;
+  value: unknown;
+  isFirst: boolean;
+  isLast: boolean;
+  isEven: boolean;
+  isOdd: boolean;
+}
+
+export interface TemplateControllerInfo {
+  id: string;
+  type: 'if' | 'else' | 'repeat' | 'with' | 'switch' | 'case' | 'au-slot' | 'portal' | 'other';
+  name: string;
+  expression?: string;
+  isActive: boolean;
+  condition?: unknown;
+  items?: RepeatItem[];
+  itemCount?: number;
+  localVariable?: string;
+  cachedViews?: number;
+}
+
+export interface TemplateInstructionInfo {
+  type: string;
+  description: string;
+  target?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface TemplateSnapshot {
+  componentKey: string;
+  componentName: string;
+  bindings: TemplateBinding[];
+  controllers: TemplateControllerInfo[];
+  instructions: TemplateInstructionInfo[];
+  hasSlots: boolean;
+  shadowMode: 'open' | 'closed' | 'none';
+  isContainerless: boolean;
 }

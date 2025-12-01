@@ -190,14 +190,15 @@ All deployments must pass:
 ```bash
 # Required files in dist/:
 ├── manifest.json         # Extension manifest
-├── index.html           # DevTools panel entry
+├── sidebar.html          # Sidebar pane entry
 ├── build/
-│   ├── entry.js         # Main application
-│   ├── background.js    # Service worker
-│   ├── contentscript.js # Content script
-│   └── detector.js      # Aurelia detector
-├── images/              # Extension icons
-└── popups/              # Extension popups
+│   ├── sidebar.js        # Sidebar application
+│   ├── background.js     # Service worker
+│   ├── contentscript.js  # Content script
+│   └── detector.js       # Aurelia detector
+├── devtools/             # DevTools page
+├── images/               # Extension icons
+└── popups/               # Extension popups
 ```
 
 ## Chrome Web Store Review Process

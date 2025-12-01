@@ -12,7 +12,7 @@ This project is a work in progress. The current version is not yet available on 
 
 ----
 
-A browser extension for debugging Aurelia 1 and 2 applications. Features a top-level DevTools tab with modern, professional interface and dual-tab architecture for comprehensive debugging.
+A browser extension for debugging Aurelia 1 and 2 applications. Integrates as a sidebar pane in Chrome's Elements panel for seamless component inspection.
 
 ## Features
 
@@ -71,7 +71,7 @@ Install the latest Node.js and npm versions.
 1. Run `npm run start` to start development mode
 2. Load the extension in Chrome (see Installation > Manual Installation)
 3. Pin the Aurelia Extension in the toolbar to verify detection: "Aurelia 2 detected on this page."
-4. Open Developer Tools and navigate to the "⚡ Aurelia" tab
+4. Open Developer Tools, go to the Elements panel, and find the "Aurelia" sidebar pane
 5. For code changes:
    - Reload the extension in `chrome://extensions`
    - Close and reopen Developer Tools (or Ctrl+R in the DevTools inspect window)
@@ -166,29 +166,31 @@ This event-first approach keeps the surface area tiny (just listen and dispatch)
 ## Architecture
 
 ### Core Components
-- **Main Application** (`src/main.ts`, `src/app.ts`) - Aurelia 2 app rendering the DevTools UI
+- **Sidebar Application** (`src/sidebar/`) - Aurelia 2 app rendering the Elements panel sidebar
 - **Extension Scripts**:
   - `detector.ts` - Detects Aurelia versions on web pages
   - `background.ts` - Service worker managing extension state
   - `contentscript.ts` - Finds Aurelia instances in DOM
-  - `devtools.js` - Creates the DevTools panel
+  - `devtools.js` - Creates the Elements sidebar pane
 
 ### Build System
-- **Vite** - Modern build tool replacing Webpack
+- **Vite** - Modern build tool
 - **TypeScript** - Type safety and modern JavaScript features
-- **Aurelia 2** - Framework for the DevTools UI itself
+- **Aurelia 2** - Framework for the sidebar UI itself
 
 ### File Structure
 ```
 src/
-├── main.ts                 # Entry point
-├── app.ts, app.html        # Main Aurelia app
-├── backend/                # Debug host and communication
+├── sidebar/                # Sidebar application
+│   ├── main.ts             # Entry point
+│   ├── sidebar-app.ts      # Main ViewModel
+│   ├── sidebar-app.html    # Template
+│   ├── sidebar-app.css     # Styles
+│   └── sidebar-debug-host.ts # Communication layer
 ├── background/             # Service worker
 ├── contentscript/          # Page content interaction
 ├── detector/               # Aurelia version detection
-├── devtools/               # DevTools panel creation
-├── resources/elements/     # UI components
+├── devtools/               # Sidebar pane creation
 ├── shared/                 # Common types and utilities
 └── popups/                 # Extension popup pages
 ```

@@ -41,6 +41,7 @@ const inspectedWindowEval = jest.fn();
 
 const createChromeMock = () => ({
   runtime: {
+    id: 'test-extension-id',
     onMessage,
     sendMessage: jest.fn(),
     connect: jest.fn(() => ({ postMessage: jest.fn(), onMessage: mkEvent(), disconnect: jest.fn() }))
@@ -88,9 +89,11 @@ export const ChromeTest = {
       return;
     }
     const queue = values.slice();
-    (global as any).chrome.devtools.inspectedWindow.eval.mockImplementation((_expr: string, cb: Function) => {
+    (global as any).chrome.devtools.inspectedWindow.eval.mockImplementation((_expr: string, cb?: Function) => {
       const next = queue.length ? queue.shift()! : { result: undefined, exception: undefined };
-      cb(next.result, next.exception);
+      if (typeof cb === 'function') {
+        cb(next.result, next.exception);
+      }
     });
   },
   reset: () => {

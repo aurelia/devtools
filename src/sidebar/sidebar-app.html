@@ -1,0 +1,617 @@
+<template>
+  <!-- Extension Invalidated State -->
+  <div if.bind="extensionInvalidated" class="state-message error">
+    <span class="icon">!</span>
+    <div class="content">
+      <strong>Extension Invalidated</strong>
+      <p>Please reload DevTools</p>
+    </div>
+  </div>
+
+  <!-- Detection States -->
+  <div if.bind="!extensionInvalidated && detectionState === 'checking'" class="state-message">
+    <span class="icon spinner">&#8635;</span>
+    <span>Detecting Aurelia...</span>
+  </div>
+
+  <div if.bind="!extensionInvalidated && detectionState === 'not-found'" class="state-message warning">
+    <span class="icon">?</span>
+    <span>No Aurelia detected</span>
+  </div>
+
+  <div if.bind="!extensionInvalidated && detectionState === 'disabled'" class="state-message">
+    <span class="icon">&#8854;</span>
+    <span>DevTools disabled for this page</span>
+  </div>
+
+  <!-- Main Content -->
+  <div if.bind="!extensionInvalidated && detectionState === 'detected'" class="sidebar-content">
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <button
+        class="tool-btn ${isElementPickerActive ? 'active' : ''}"
+        click.trigger="toggleElementPicker()"
+        title="Select element from page">
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="8" cy="8" r="2" fill="currentColor"/>
+        </svg>
+      </button>
+
+      <div class="search-wrapper">
+        <input
+          type="text"
+          class="search-input"
+          placeholder="Search components..."
+          value.bind="searchQuery"
+          input.trigger="handleSearchInput($event)"
+          focus.trigger="isSearchOpen = searchQuery.length > 0">
+        <button if.bind="searchQuery" class="clear-btn" click.trigger="clearSearch()">&#215;</button>
+
+        <!-- Search Results Dropdown -->
+        <div if.bind="isSearchOpen && searchResults.length" class="search-dropdown">
+          <div
+            repeat.for="result of searchResults"
+            class="search-result"
+            click.trigger="selectSearchResult(result)">
+            <span class="result-icon">${result.type === 'custom-element' ? '&#128230;' : '&#128295;'}</span>
+            <span class="result-name">${result.name}</span>
+          </div>
+        </div>
+      </div>
+
+      <button
+        class="tool-btn ${followChromeSelection ? 'active' : ''}"
+        click.trigger="toggleFollowChromeSelection()"
+        title="Auto-sync with Elements selection">
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <path d="M3 8h4v4H3zm6-4h4v4H9z" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M5 8L9 4" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Component Tree Panel -->
+    <div if.bind="hasComponentTree" class="tree-panel">
+      <div class="tree-header" click.trigger="toggleTreePanel()">
+        <span class="expand-icon">${isTreePanelExpanded ? '&#9660;' : '&#9654;'}</span>
+        <span class="tree-title">Component Tree</span>
+        <span class="tree-count">${componentTreeCount}</span>
+        <button class="refresh-btn" click.trigger="loadComponentTree()" title="Refresh tree">&#8635;</button>
+      </div>
+      <div if.bind="isTreePanelExpanded" class="tree-content">
+        <div repeat.for="row of getTreeRows(treeRevision)"
+             class="tree-node ${isTreeNodeSelected(row.node) ? 'selected' : ''}"
+             style="padding-left: ${8 + row.depth * 14}px"
+             click.trigger="selectTreeNode(row.node)">
+          <button if.bind="row.node.hasChildren"
+                  class="tree-expand-btn"
+                  click.trigger="toggleTreeNode(row.node, $event)">
+            ${isTreeNodeExpanded(row.node) ? '&#9660;' : '&#9654;'}
+          </button>
+          <span if.bind="!row.node.hasChildren" class="tree-expand-spacer"></span>
+          <span class="tree-node-icon ${row.node.type}">${row.node.type === 'custom-element' ? '&#9670;' : '&#9679;'}</span>
+          <span class="tree-node-name">${row.node.name}</span>
+          <span if.bind="row.node.type === 'custom-attribute'" class="tree-node-badge attr">@</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- No Selection State -->
+    <div if.bind="!selectedElement" class="empty-state">
+      <p>Select an element in the page or Elements panel to inspect its Aurelia bindings.</p>
+    </div>
+
+    <!-- Selected Component -->
+    <div if.bind="selectedElement" class="inspector">
+      <!-- Component Header -->
+      <div class="component-header">
+        <div class="component-header-info">
+          <div class="component-main-line">
+            <span class="component-icon">${selectedNodeType === 'custom-element' ? '&#128230;' : '&#128295;'}</span>
+            <span class="component-name">${selectedElement.name}</span>
+          </div>
+          <div if.bind="isShowingBindingContext" class="binding-context-label">
+            <span class="context-indicator">&#8593;</span>
+            <span class="selected-element">&lt;${selectedElementTagName}&gt;</span>
+            <span class="context-text">binding context</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="icon-btn" click.trigger="revealInElements()" title="Reveal in Elements">
+            <svg viewBox="0 0 16 16" width="12" height="12">
+              <path d="M8 2v12M4 6l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </button>
+          <button
+            class="icon-btn ${isExportCopied ? 'copied' : ''}"
+            click.trigger="exportComponentAsJson()"
+            title="Export as JSON">
+            <svg viewBox="0 0 16 16" width="12" height="12">
+              <rect x="3" y="2" width="8" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <rect x="5" y="4" width="8" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Sections -->
+      <div class="sections">
+        <!-- Bindables -->
+        <div if.bind="hasBindables" class="section">
+          <div class="section-header" click.trigger="toggleSection('bindables')">
+            <span class="expand-icon">${expandedSections.bindables ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Bindables</span>
+            <span class="section-count">${selectedElement.bindables.length}</span>
+          </div>
+          <div if.bind="expandedSections.bindables" class="section-content">
+            <div repeat.for="row of getPropertyRows(selectedElement.bindables, propertyRowsRevision)"
+                 class="property-row"
+                 style="padding-left: ${8 + row.depth * 12}px">
+              <button if.bind="row.property.canExpand"
+                      class="expand-btn"
+                      click.trigger="togglePropertyExpansion(row.property)">
+                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
+              </button>
+              <span class="property-name">${row.property.name}</span>
+              <span class="property-colon">:</span>
+              <span if.bind="!row.property.isEditing"
+                    class="property-value ${getPropertyTypeClass(row.property.type)}"
+                    dblclick.trigger="editProperty(row.property)">
+                ${formatPropertyValue(row.property.value)}
+              </span>
+              <input if.bind="row.property.isEditing"
+                     class="property-editor"
+                     value.bind="row.property.value"
+                     keydown.trigger="$event.key === 'Enter' ? saveProperty(row.property, $event.target.value) : ($event.key === 'Escape' ? cancelPropertyEdit(row.property) : null)"
+                     blur.trigger="saveProperty(row.property, $event.target.value)"
+                     ref="propertyInput">
+              <button class="copy-btn ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                      click.trigger="copyPropertyValue(row.property, $event)"
+                      title="Copy value">
+                ${isPropertyCopied(row.property) ? '&#10003;' : '&#128203;'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Properties -->
+        <div if.bind="hasProperties" class="section">
+          <div class="section-header" click.trigger="toggleSection('properties')">
+            <span class="expand-icon">${expandedSections.properties ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Properties</span>
+            <span class="section-count">${selectedElement.properties.length}</span>
+          </div>
+          <div if.bind="expandedSections.properties" class="section-content">
+            <div repeat.for="row of getPropertyRows(selectedElement.properties, propertyRowsRevision)"
+                 class="property-row"
+                 style="padding-left: ${8 + row.depth * 12}px">
+              <button if.bind="row.property.canExpand"
+                      class="expand-btn"
+                      click.trigger="togglePropertyExpansion(row.property)">
+                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
+              </button>
+              <span class="property-name">${row.property.name}</span>
+              <span class="property-colon">:</span>
+              <span if.bind="!row.property.isEditing"
+                    class="property-value ${getPropertyTypeClass(row.property.type)}"
+                    dblclick.trigger="editProperty(row.property)">
+                ${formatPropertyValue(row.property.value)}
+              </span>
+              <input if.bind="row.property.isEditing"
+                     class="property-editor"
+                     value.bind="row.property.value"
+                     keydown.trigger="$event.key === 'Enter' ? saveProperty(row.property, $event.target.value) : ($event.key === 'Escape' ? cancelPropertyEdit(row.property) : null)"
+                     blur.trigger="saveProperty(row.property, $event.target.value)">
+              <button class="copy-btn ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                      click.trigger="copyPropertyValue(row.property, $event)"
+                      title="Copy value">
+                ${isPropertyCopied(row.property) ? '&#10003;' : '&#128203;'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controller -->
+        <div if.bind="hasController" class="section">
+          <div class="section-header" click.trigger="toggleSection('controller')">
+            <span class="expand-icon">${expandedSections.controller ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Controller</span>
+            <span class="section-count">${selectedElement.controller.properties.length}</span>
+          </div>
+          <div if.bind="expandedSections.controller" class="section-content">
+            <div repeat.for="row of getPropertyRows(selectedElement.controller.properties, propertyRowsRevision)"
+                 class="property-row"
+                 style="padding-left: ${8 + row.depth * 12}px">
+              <button if.bind="row.property.canExpand"
+                      class="expand-btn"
+                      click.trigger="togglePropertyExpansion(row.property)">
+                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
+              </button>
+              <span class="property-name">${row.property.name}</span>
+              <span class="property-colon">:</span>
+              <span class="property-value ${getPropertyTypeClass(row.property.type)}">
+                ${formatPropertyValue(row.property.value)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Custom Attributes -->
+        <div if.bind="hasCustomAttributes" class="section">
+          <div class="section-header" click.trigger="toggleSection('attributes')">
+            <span class="expand-icon">${expandedSections.attributes ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Custom Attributes</span>
+            <span class="section-count">${selectedElementAttributes.length}</span>
+          </div>
+          <div if.bind="expandedSections.attributes" class="section-content">
+            <div repeat.for="attr of selectedElementAttributes" class="attribute-item">
+              <div class="attribute-name">@${attr.name}</div>
+              <div repeat.for="row of getPropertyRows(attr.bindables, propertyRowsRevision)"
+                   class="property-row sub"
+                   style="padding-left: ${12 + row.depth * 12}px">
+                <span class="property-name">${row.property.name}</span>
+                <span class="property-colon">:</span>
+                <span class="property-value ${getPropertyTypeClass(row.property.type)}">
+                  ${formatPropertyValue(row.property.value)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lifecycle Hooks -->
+        <div if.bind="hasLifecycleHooks" class="section">
+          <div class="section-header" click.trigger="toggleSection('lifecycle')">
+            <span class="expand-icon">${expandedSections.lifecycle ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Lifecycle Hooks</span>
+            <span class="section-count">${implementedHooksCount}/${totalHooksCount}</span>
+          </div>
+          <div if.bind="expandedSections.lifecycle" class="section-content">
+            <div repeat.for="hook of lifecycleHooks.hooks" class="hook-row">
+              <span class="hook-indicator ${hook.implemented ? 'implemented' : 'not-implemented'}">
+                ${hook.implemented ? '&#10003;' : '&#10007;'}
+              </span>
+              <span class="hook-name">${hook.name}</span>
+              <span if.bind="hook.isAsync" class="hook-async">async</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Computed Properties -->
+        <div if.bind="hasComputedProperties" class="section">
+          <div class="section-header" click.trigger="toggleSection('computed')">
+            <span class="expand-icon">${expandedSections.computed ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Computed</span>
+            <span class="section-count">${computedProperties.length}</span>
+          </div>
+          <div if.bind="expandedSections.computed" class="section-content">
+            <div repeat.for="computed of computedProperties" class="property-row">
+              <span class="property-name">${computed.name}</span>
+              <span class="computed-type">${computed.hasGetter ? 'get' : ''}${computed.hasSetter ? '/set' : ''}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Enhanced DI (Aurelia 2) -->
+        <div if.bind="isEnhancedDI" class="section">
+          <div class="section-header" click.trigger="toggleSection('dependencies')">
+            <span class="expand-icon">${expandedSections.dependencies ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Dependency Injection</span>
+            <span class="section-badge v2">v2</span>
+          </div>
+          <div if.bind="expandedSections.dependencies" class="section-content">
+            <!-- Injected Dependencies -->
+            <div if.bind="hasEnhancedDependencies" class="di-subsection">
+              <div class="subsection-title">Injected (${enhancedDI.dependencies.length})</div>
+              <div repeat.for="dep of enhancedDI.dependencies" class="dependency-row-enhanced">
+                <div class="dep-main">
+                  <span class="dep-icon">${dep.type === 'interface' ? '&#9671;' : '&#9632;'}</span>
+                  <span class="dep-instance-name" if.bind="dep.instanceName">${dep.instanceName}</span>
+                  <span class="dep-key-name" if.bind="!dep.instanceName">${dep.name}</span>
+                </div>
+                <div class="dep-preview" if.bind="dep.instancePreview">
+                  <span repeat.for="[key, val] of Object.entries(dep.instancePreview)" class="preview-prop">
+                    <span class="preview-key">${key}:</span>
+                    <span class="preview-val">${val}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <!-- Container Hierarchy -->
+            <div if.bind="hasContainerHierarchy" class="di-subsection">
+              <div class="subsection-title">Container Hierarchy</div>
+              <div class="container-tree">
+                <div repeat.for="ancestor of containerAncestorsReversed" class="container-node" css="padding-left: ${$index * 12}px">
+                  <span class="container-marker">${ancestor.isRoot ? '&#9679;' : '&#9675;'}</span>
+                  <span class="container-owner" if.bind="ancestor.ownerName">${ancestor.ownerName}</span>
+                  <span class="container-id" if.bind="!ancestor.ownerName">#${ancestor.id}</span>
+                </div>
+                <div class="container-node current" css="padding-left: ${containerAncestorsReversed.length * 12}px">
+                  <span class="container-marker current">&#9658;</span>
+                  <span class="container-owner current">${enhancedDI.containerHierarchy.current.ownerName || 'current'}</span>
+                </div>
+              </div>
+            </div>
+            <!-- Available Services -->
+            <div if.bind="availableServicesCount > 0" class="di-subsection">
+              <div class="subsection-title clickable" click.trigger="toggleAvailableServices()">
+                <span class="expand-icon">${showAvailableServices ? '&#9660;' : '&#9654;'}</span>
+                Available Services (${availableServicesCount})
+              </div>
+              <div if.bind="showAvailableServices" class="services-list">
+                <div repeat.for="svc of enhancedDI.availableServices" class="service-row">
+                  <span class="svc-icon">${svc.type === 'interface' ? '&#9671;' : '&#9632;'}</span>
+                  <span class="svc-name">${svc.name}</span>
+                  <span if.bind="svc.isFromAncestor" class="inherited-badge">inh</span>
+                </div>
+              </div>
+            </div>
+            <!-- Empty state -->
+            <div if.bind="!hasEnhancedDependencies && !hasContainerHierarchy && availableServicesCount === 0" class="empty-state">
+              No DI info available
+            </div>
+          </div>
+        </div>
+
+        <!-- Basic Dependencies (Aurelia 1) -->
+        <div if.bind="!isEnhancedDI && hasDependencies" class="section">
+          <div class="section-header" click.trigger="toggleSection('dependencies')">
+            <span class="expand-icon">${expandedSections.dependencies ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Dependencies</span>
+            <span class="section-count">${dependencies.dependencies.length}</span>
+          </div>
+          <div if.bind="expandedSections.dependencies" class="section-content">
+            <div repeat.for="dep of dependencies.dependencies" class="dependency-row">
+              <span class="dep-icon">${dep.type === 'interface' ? '&#9671;' : '&#9632;'}</span>
+              <span class="dep-name">${dep.name}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Route Info -->
+        <div if.bind="hasRouteInfo" class="section">
+          <div class="section-header" click.trigger="toggleSection('route')">
+            <span class="expand-icon">${expandedSections.route ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Route</span>
+          </div>
+          <div if.bind="expandedSections.route" class="section-content">
+            <div class="route-info">
+              <div class="route-path">${routeInfo.currentRoute}</div>
+              <div if.bind="routeInfo.params.length" class="route-params">
+                <span repeat.for="param of routeInfo.params" class="param">${param.name}: ${param.value}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slots -->
+        <div if.bind="hasSlots" class="section">
+          <div class="section-header" click.trigger="toggleSection('slots')">
+            <span class="expand-icon">${expandedSections.slots ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Slots</span>
+            <span class="section-count">${activeSlotCount}/${slotInfo.slots.length}</span>
+          </div>
+          <div if.bind="expandedSections.slots" class="section-content">
+            <div repeat.for="slot of slotInfo.slots" class="slot-row">
+              <span class="slot-indicator ${slot.hasContent ? 'filled' : 'empty'}">
+                ${slot.hasContent ? '&#9632;' : '&#9633;'}
+              </span>
+              <span class="slot-name">${slot.name || 'default'}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Template Debugger -->
+        <div if.bind="hasTemplateInfo" class="section">
+          <div class="section-header" click.trigger="toggleSection('template')">
+            <span class="expand-icon">${expandedSections.template ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Template</span>
+            <span class="section-count">${templateBindingsCount + templateControllersCount}</span>
+          </div>
+          <div if.bind="expandedSections.template" class="section-content template-panel">
+            <!-- Template Bindings -->
+            <div if.bind="templateBindingsCount > 0" class="template-subsection">
+              <div class="subsection-title">
+                <span class="subsection-icon">&#8644;</span>
+                Bindings (${templateBindingsCount})
+              </div>
+              <div class="template-bindings">
+                <div repeat.for="binding of templateBindings"
+                     class="template-binding ${binding.type}"
+                     click.trigger="toggleBindingExpand(binding)">
+                  <div class="binding-header">
+                    <span class="binding-type-icon" innerhtml.bind="getBindingTypeIcon(binding.type)"></span>
+                    <span class="binding-target">${binding.target}</span>
+                    <span class="binding-mode ${getBindingModeClass(binding.mode)}">${getBindingModeLabel(binding.mode)}</span>
+                    <span class="binding-expression">${binding.expression}</span>
+                  </div>
+                  <div if.bind="isBindingExpanded(binding)" class="binding-details">
+                    <div class="binding-detail-row">
+                      <span class="detail-label">Type:</span>
+                      <span class="detail-value">${binding.type}</span>
+                    </div>
+                    <div class="binding-detail-row">
+                      <span class="detail-label">Mode:</span>
+                      <span class="detail-value">${binding.mode}</span>
+                    </div>
+                    <div class="binding-detail-row">
+                      <span class="detail-label">Value:</span>
+                      <span class="detail-value ${getPropertyTypeClass(binding.valueType)}">${formatBindingValue(binding.value)}</span>
+                    </div>
+                    <div class="binding-detail-row">
+                      <span class="detail-label">Bound:</span>
+                      <span class="detail-value">${binding.isBound ? 'Yes' : 'No'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Template Controllers -->
+            <div if.bind="templateControllersCount > 0" class="template-subsection">
+              <div class="subsection-title">
+                <span class="subsection-icon">&#9881;</span>
+                Controllers (${templateControllersCount})
+              </div>
+              <div class="template-controllers">
+                <div repeat.for="ctrl of templateControllers"
+                     class="template-controller ${ctrl.type} ${ctrl.isActive ? 'active' : 'inactive'}"
+                     click.trigger="toggleControllerExpand(ctrl)">
+                  <div class="controller-header">
+                    <span class="controller-type-icon" innerhtml.bind="getControllerTypeIcon(ctrl.type)"></span>
+                    <span class="controller-type">${ctrl.type}</span>
+                    <span if.bind="ctrl.expression" class="controller-expression">${ctrl.expression}</span>
+                    <span class="controller-status ${ctrl.isActive ? 'active' : 'inactive'}">
+                      ${ctrl.isActive ? '&#10003;' : '&#10007;'}
+                    </span>
+                  </div>
+                  <div if.bind="isControllerExpanded(ctrl)" class="controller-details">
+                    <!-- If/Else Details -->
+                    <div if.bind="ctrl.type === 'if' || ctrl.type === 'else'" class="controller-detail-row">
+                      <span class="detail-label">Condition:</span>
+                      <span class="detail-value type-boolean">${ctrl.condition}</span>
+                    </div>
+                    <div if.bind="ctrl.cachedViews" class="controller-detail-row">
+                      <span class="detail-label">Cached Views:</span>
+                      <span class="detail-value">${ctrl.cachedViews}</span>
+                    </div>
+
+                    <!-- Repeat Details -->
+                    <div if.bind="ctrl.type === 'repeat'" class="repeat-details">
+                      <div class="controller-detail-row">
+                        <span class="detail-label">Variable:</span>
+                        <span class="detail-value type-string">${ctrl.localVariable}</span>
+                      </div>
+                      <div class="controller-detail-row">
+                        <span class="detail-label">Item Count:</span>
+                        <span class="detail-value type-number">${ctrl.itemCount}</span>
+                      </div>
+                      <div if.bind="ctrl.items && ctrl.items.length > 0" class="repeat-items">
+                        <div class="repeat-items-header">Items Preview:</div>
+                        <div repeat.for="item of ctrl.items" class="repeat-item">
+                          <span class="item-index">[${item.index}]</span>
+                          <span class="item-value">${item.value}</span>
+                          <span class="item-flags">
+                            <span if.bind="item.isFirst" class="item-flag first">first</span>
+                            <span if.bind="item.isLast" class="item-flag last">last</span>
+                            <span if.bind="item.isEven" class="item-flag even">even</span>
+                            <span if.bind="item.isOdd" class="item-flag odd">odd</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Template Meta -->
+            <div if.bind="templateSnapshot.hasSlots || templateSnapshot.shadowMode !== 'none' || templateSnapshot.isContainerless" class="template-meta">
+              <span if.bind="templateSnapshot.hasSlots" class="meta-badge slots">has slots</span>
+              <span if.bind="templateSnapshot.shadowMode !== 'none'" class="meta-badge shadow">${templateSnapshot.shadowMode} shadow</span>
+              <span if.bind="templateSnapshot.isContainerless" class="meta-badge containerless">containerless</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Expression Evaluator -->
+        <div class="section">
+          <div class="section-header" click.trigger="toggleSection('expression')">
+            <span class="expand-icon">${expandedSections.expression ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Evaluate</span>
+          </div>
+          <div if.bind="expandedSections.expression" class="section-content expression-panel">
+            <div class="expression-input-wrapper">
+              <input
+                type="text"
+                class="expression-input"
+                placeholder="this.propertyName"
+                value.bind="expressionInput"
+                keydown.trigger="$event.key === 'Enter' ? evaluateExpression() : null">
+              <button class="eval-btn" click.trigger="evaluateExpression()">Run</button>
+            </div>
+            <div if.bind="expressionError" class="expression-error">${expressionError}</div>
+            <div if.bind="expressionResult" class="expression-result">
+              <span class="result-type">${expressionResultType}</span>
+              <pre class="result-value">${expressionResult}</pre>
+            </div>
+            <div if.bind="expressionHistory.length" class="expression-history">
+              <div repeat.for="expr of expressionHistory"
+                   class="history-item"
+                   click.trigger="selectHistoryExpression(expr)">
+                ${expr}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Timeline / Interaction Recorder -->
+        <div class="section">
+          <div class="section-header" click.trigger="toggleSection('timeline')">
+            <span class="expand-icon">${expandedSections.timeline ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Timeline</span>
+            <span if.bind="hasTimelineEvents" class="section-count">${timelineEventCount}</span>
+            <span if.bind="isRecording" class="recording-indicator">&#9679;</span>
+          </div>
+          <div if.bind="expandedSections.timeline" class="section-content timeline-panel">
+            <div class="timeline-controls">
+              <button if.bind="!isRecording" class="timeline-btn start" click.trigger="startRecording()">
+                <span class="btn-icon">&#9654;</span>
+                <span class="btn-text">Record</span>
+              </button>
+              <button if.bind="isRecording" class="timeline-btn stop" click.trigger="stopRecording()">
+                <span class="btn-icon">&#9632;</span>
+                <span class="btn-text">Stop</span>
+              </button>
+              <button class="timeline-btn clear" click.trigger="clearTimeline()" disabled.bind="!hasTimelineEvents && !isRecording">
+                <span class="btn-icon">&#8855;</span>
+                <span class="btn-text">Clear</span>
+              </button>
+            </div>
+            <div if.bind="!hasTimelineEvents && !isRecording" class="timeline-empty">
+              Click Record to start capturing interactions
+            </div>
+            <div if.bind="isRecording && !hasTimelineEvents" class="timeline-empty recording">
+              Recording... Interact with the page to capture events
+            </div>
+            <div if.bind="hasTimelineEvents" class="timeline-events">
+              <div repeat.for="event of timelineEvents"
+                   class="timeline-event ${getTimelineEventTypeClass(event.eventName)}"
+                   click.trigger="toggleTimelineEvent(event)">
+                <div class="event-header">
+                  <span class="event-time">${formatTimelineTimestamp(event.timestamp)}</span>
+                  <span class="event-type">${event.eventName}</span>
+                  <span if.bind="event.vmName" class="event-component" click.trigger="selectTimelineComponent(event)">${event.vmName}</span>
+                  <span if.bind="event.handlerName" class="event-handler">${event.handlerName}</span>
+                  <span if.bind="event.duration" class="event-duration">${event.duration}ms</span>
+                </div>
+                <div if.bind="isTimelineEventExpanded(event)" class="event-details">
+                  <div if.bind="event.before" class="event-snapshot">
+                    <span class="snapshot-label">Before:</span>
+                    <div class="snapshot-data">
+                      <span repeat.for="[key, val] of Object.entries(event.before)" class="snapshot-prop">
+                        ${key}: ${val}
+                      </span>
+                    </div>
+                  </div>
+                  <div if.bind="event.after" class="event-snapshot">
+                    <span class="snapshot-label">After:</span>
+                    <div class="snapshot-data">
+                      <span repeat.for="[key, val] of Object.entries(event.after)" class="snapshot-prop">
+                        ${key}: ${val}
+                      </span>
+                    </div>
+                  </div>
+                  <div if.bind="event.error" class="event-error">
+                    Error: ${event.error}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
