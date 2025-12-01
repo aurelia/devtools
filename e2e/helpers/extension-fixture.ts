@@ -10,15 +10,22 @@ export const test = base.extend<ExtensionFixtures>({
   context: async ({}, use) => {
     const extensionPath = path.join(__dirname, '..', '..', 'dist');
 
+    const args = [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+      '--no-first-run',
+      '--disable-default-apps',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+    ];
+
+    if (process.env.CI) {
+      args.push('--headless=new');
+    }
+
     const context = await chromium.launchPersistentContext('', {
       headless: false,
-      channel: 'chromium',
-      args: [
-        `--disable-extensions-except=${extensionPath}`,
-        `--load-extension=${extensionPath}`,
-        '--no-first-run',
-        '--disable-default-apps',
-      ],
+      args,
     });
 
     await use(context);
@@ -28,7 +35,7 @@ export const test = base.extend<ExtensionFixtures>({
   extensionId: async ({ context }, use) => {
     let serviceWorker = context.serviceWorkers()[0];
     if (!serviceWorker) {
-      serviceWorker = await context.waitForEvent('serviceworker');
+      serviceWorker = await context.waitForEvent('serviceworker', { timeout: 30000 });
     }
 
     const extensionId = serviceWorker.url().split('/')[2];
