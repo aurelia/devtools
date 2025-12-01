@@ -1,0 +1,24 @@
+<div id="app-root">
+  <h1>${message}</h1>
+
+  <section class="counters">
+    <h2>Counter Components</h2>
+    <counter value.bind="counter" label="Main Counter"></counter>
+    <counter value="10" label="Static Counter"></counter>
+  </section>
+
+  <section class="users">
+    <h2>User Cards</h2>
+    <user-card
+      repeat.for="user of users"
+      name.bind="user.name"
+      email.bind="user.email"
+      role.bind="user.role"
+    ></user-card>
+  </section>
+
+  <section class="controls">
+    <button class="increment-btn" click.trigger="increment()">Increment Main</button>
+    <button class="add-user-btn" click.trigger="addUser()">Add User</button>
+  </section>
+</div>

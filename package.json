@@ -1,7 +1,7 @@
 {
   "name": "@aurelia/devtools",
   "description": "A browser extension for debugging Aurelia 1 and 2 applications.",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/aurelia/devtools"
@@ -15,6 +15,7 @@
   "devDependencies": {
     "@aurelia/testing": "^2.0.0-beta.25",
     "@aurelia/vite-plugin": "^2.0.0-beta.25",
+    "@playwright/test": "^1.57.0",
     "@tailwindcss/forms": "^0.5.10",
     "@types/chrome": "0.0.290",
     "@types/jest": "^29.5.12",
@@ -47,6 +48,11 @@
     "analyze": "rimraf dist && vite-bundle-analyzer",
     "test": "NODE_OPTIONS=--no-warnings jest --config jest.config.mjs --passWithNoTests",
     "test:watch": "NODE_OPTIONS=--no-warnings jest --config jest.config.mjs --watch",
-    "test:ci": "NODE_OPTIONS=--no-warnings jest --config jest.config.mjs --runInBand"
+    "test:ci": "NODE_OPTIONS=--no-warnings jest --config jest.config.mjs --runInBand",
+    "test:e2e": "npm run build && npx playwright test --config=e2e/playwright.config.ts",
+    "test:e2e:headed": "npm run build && npx playwright test --config=e2e/playwright.config.ts --headed",
+    "test:e2e:debug": "npm run build && npx playwright test --config=e2e/playwright.config.ts --debug",
+    "test:e2e:ui": "npm run build && npx playwright test --config=e2e/playwright.config.ts --ui",
+    "e2e:fixture:install": "cd e2e/fixtures/aurelia-app && npm install"
   }
 }

@@ -1,6 +1,6 @@
-let panelCreated = false;
 let detectedVersion = null;
 let elementsSidebarPane = null;
+let sidebarCreated = false;
 
 const optOutCheckExpression = `
   (function() {
@@ -36,45 +36,33 @@ function installHooksIfAllowed() {
   chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
 }
 
-// Always create the panel immediately
-function createAureliaPanel() {
-  if (panelCreated) return;
-
-  const panelHtml = "index.html";
-  const panelTitle = "Aurelia";
-
-  chrome.devtools.panels.create(
-    panelTitle,
-    "images/16.png",
-    panelHtml,
-    function (panel) {
-      panelCreated = true;
-
-      // Set initial detection state to false - let the app handle detection unless opted out
-      chrome.devtools.inspectedWindow.eval(`
-        if (!(${optOutCheckExpression})) {
-          window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'checking';
-        }
-      `);
-
-  // Proactively install hooks when the panel opens
-  installHooksIfAllowed();
+// Set initial detection state
+function initializeDetectionState() {
+  chrome.devtools.inspectedWindow.eval(`
+    if (!(${optOutCheckExpression})) {
+      window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'checking';
     }
-  );
+  `);
+  installHooksIfAllowed();
 }
 
-// Create an Elements sidebar to show Aurelia info for $0
+// Create an enhanced Elements sidebar - this is now the primary UI
 function createElementsSidebar() {
   if (!chrome?.devtools?.panels?.elements?.createSidebarPane) return;
   if (elementsSidebarPane) return;
 
   chrome.devtools.panels.elements.createSidebarPane('Aurelia', function(pane) {
     elementsSidebarPane = pane;
+    sidebarCreated = true;
+
     let pageSet = false;
     try {
-      pane.setPage('index.html');
+      // Use the new sidebar-specific HTML page
+      // Path is relative to extension root, not devtools folder
+      pane.setPage('../sidebar.html');
       pageSet = true;
     } catch (error) {
+      console.error('Failed to set sidebar page:', error);
       pageSet = false;
     }
 
@@ -86,6 +74,7 @@ function createElementsSidebar() {
         pane.onShown.addListener(() => installHooksIfAllowed());
       } catch {}
     } else {
+      // Fallback to setExpression if setPage fails
       const updateSidebar = () => {
         if (!elementsSidebarPane) return;
         const expr = `(() => {
@@ -103,7 +92,7 @@ function createElementsSidebar() {
               },
             };
 
-            // Get binding info for the selected node (works for text nodes too)
+            // Get binding info for the selected node
             if (hook.getNodeBindingInfo) {
               const bindingInfo = hook.getNodeBindingInfo($0);
               if (bindingInfo) {
@@ -162,18 +151,12 @@ function createElementsSidebar() {
 
 // Update detection state when version is detected
 function updateDetectionState(version) {
-  if (panelCreated) {
-    chrome.devtools.inspectedWindow.eval(`
-  window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = ${version};
-      window.__AURELIA_DEVTOOLS_VERSION__ = ${version};
-      window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'detected';
-    `);
-  }
+  chrome.devtools.inspectedWindow.eval(`
+    window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = ${version};
+    window.__AURELIA_DEVTOOLS_VERSION__ = ${version};
+    window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'detected';
+  `);
 }
-
-// Create panel immediately when devtools opens
-createAureliaPanel();
-createElementsSidebar();
 
 // Listen for Aurelia detection messages
 chrome.runtime.onMessage.addListener((req, sender) => {
@@ -251,7 +234,7 @@ chrome.devtools.inspectedWindow.eval(
     } else if (result && result.status === 'detected' && result.version) {
       detectedVersion = result.version;
       updateDetectionState(result.version);
-    } else if (panelCreated && result && result.status === 'not-found') {
+    } else if (sidebarCreated && result && result.status === 'not-found') {
       chrome.devtools.inspectedWindow.eval(`
         window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'not-found';
       `);
@@ -280,6 +263,8 @@ function install(debugValueLookup) {
   const interactionLog = [];
   let interactionSequence = 0;
   const MAX_INTERACTION_LOG = 200;
+  let isRecordingInteractions = false;
+  const activePropertyWatchers = new Map();
   installEventProxy();
   installNavigationListeners();
   installRouterEventTap();
@@ -298,6 +283,8 @@ function install(debugValueLookup) {
     replayInteraction: (id) => replayInteraction(id),
     applyInteractionSnapshot: (id, phase) => applyInteractionSnapshot(id, phase),
     clearInteractionLog: () => clearInteractionLog(),
+    startInteractionRecording: () => startInteractionRecording(),
+    stopInteractionRecording: () => stopInteractionRecording(),
     getAllInfo: (root) => {
       root = root ?? document.body;
       return [
@@ -762,6 +749,11 @@ function install(debugValueLookup) {
       return extractDependencies(controller);
     },
 
+    getEnhancedDISnapshot: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      return extractEnhancedDISnapshot(controller);
+    },
+
     getRouteInfo: (componentKey) => {
       const controller = findControllerByKey(componentKey);
       return extractRouteInfo(controller);
@@ -770,6 +762,73 @@ function install(debugValueLookup) {
     getSlotInfo: (componentKey) => {
       const controller = findControllerByKey(componentKey);
       return extractSlotInfo(controller);
+    },
+
+    getTemplateSnapshot: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      return extractTemplateSnapshot(controller);
+    },
+
+    attachPropertyWatchers: (componentKey) => attachPropertyWatchers(componentKey),
+    detachPropertyWatchers: (componentKey) => detachPropertyWatchers(componentKey),
+    detachAllPropertyWatchers: () => detachAllPropertyWatchers(),
+
+    getComponentByKey: (componentKey) => {
+      const controller = findControllerByKey(componentKey);
+      if (!controller) return null;
+      return extractControllerInfo(controller);
+    },
+
+    getSimplifiedComponentTree: () => {
+      try {
+        const fullTree = hooks.getComponentTree();
+        const simplifyNode = (node) => {
+          const simplified = [];
+
+          if (node.customElementInfo && node.customElementInfo.name) {
+            simplified.push({
+              key: node.customElementInfo.key || node.customElementInfo.name,
+              name: node.customElementInfo.name,
+              tagName: node.tagName || node.customElementInfo.name,
+              type: 'custom-element',
+              hasChildren: (node.children && node.children.length > 0) ||
+                           (node.customAttributesInfo && node.customAttributesInfo.length > 0),
+              childCount: (node.children ? node.children.length : 0) +
+                          (node.customAttributesInfo ? node.customAttributesInfo.length : 0),
+              children: [
+                ...(node.customAttributesInfo || []).map(attr => ({
+                  key: attr.key || attr.name,
+                  name: attr.name,
+                  tagName: node.tagName || '',
+                  type: 'custom-attribute',
+                  hasChildren: false,
+                  childCount: 0,
+                  children: []
+                })),
+                ...(node.children || []).flatMap(child => simplifyNode(child))
+              ]
+            });
+          } else if (node.customAttributesInfo && node.customAttributesInfo.length > 0) {
+            for (const attr of node.customAttributesInfo) {
+              simplified.push({
+                key: attr.key || attr.name,
+                name: attr.name,
+                tagName: node.tagName || '',
+                type: 'custom-attribute',
+                hasChildren: node.children && node.children.length > 0,
+                childCount: node.children ? node.children.length : 0,
+                children: (node.children || []).flatMap(child => simplifyNode(child))
+              });
+            }
+          }
+
+          return simplified;
+        };
+
+        return fullTree.flatMap(root => simplifyNode(root));
+      } catch (error) {
+        return [];
+      }
     },
   };
 
@@ -1305,6 +1364,8 @@ function install(debugValueLookup) {
   }
 
   function logInteraction(entry, meta) {
+    if (!isRecordingInteractions) return;
+
     interactionLog.push({
       ...entry,
       ...meta,
@@ -1320,6 +1381,16 @@ function install(debugValueLookup) {
         window.dispatchEvent(new CustomEvent('aurelia-devtools:interaction', { detail: exported }));
       }
     } catch {}
+  }
+
+  function startInteractionRecording() {
+    isRecordingInteractions = true;
+    return true;
+  }
+
+  function stopInteractionRecording() {
+    isRecordingInteractions = false;
+    return true;
   }
 
   function installNavigationListeners() {
@@ -1601,6 +1672,134 @@ function install(debugValueLookup) {
     return null;
   }
 
+  function serializePropertyValue(value) {
+    if (value === null) return { value: null, type: 'null' };
+    if (value === undefined) return { value: undefined, type: 'undefined' };
+    const t = typeof value;
+    if (t === 'function') return { value: '[Function]', type: 'function' };
+    if (t === 'object') {
+      try {
+        return { value: JSON.parse(JSON.stringify(value)), type: Array.isArray(value) ? 'array' : 'object' };
+      } catch {
+        return { value: '[Object]', type: 'object' };
+      }
+    }
+    return { value, type: t };
+  }
+
+  function attachPropertyWatchers(componentKey) {
+    if (!componentKey) return false;
+
+    detachPropertyWatchers(componentKey);
+
+    const controller = findControllerByKey(componentKey);
+    if (!controller) return false;
+
+    const viewModel = controller.viewModel || controller.bindingContext || controller;
+    if (!viewModel) return false;
+
+    const version = detectControllerVersion(controller);
+    if (version !== 2) {
+      return false;
+    }
+
+    const container = controller.container;
+    if (!container) return false;
+
+    let observerLocator = null;
+    try {
+      const IObserverLocator = container.get && container.getAll
+        ? Array.from(container.getAll ? container.getAll(Symbol.for('au:resource:observer-locator')) || [] : []).find(Boolean)
+        : null;
+
+      if (!IObserverLocator) {
+        const tryGet = (key) => {
+          try { return container.get(key); } catch { return null; }
+        };
+        observerLocator = tryGet(Symbol.for('au:resource:observer-locator'))
+          || tryGet('IObserverLocator')
+          || (container.root && container.root.get && tryGet.call(container.root, Symbol.for('au:resource:observer-locator')));
+      } else {
+        observerLocator = IObserverLocator;
+      }
+    } catch {}
+
+    if (!observerLocator) {
+      try {
+        if (typeof viewModel.$controller !== 'undefined' && viewModel.$controller.container) {
+          const c = viewModel.$controller.container;
+          observerLocator = c.get && c.get(Symbol.for('au:resource:observer-locator'));
+        }
+      } catch {}
+    }
+
+    if (!observerLocator || typeof observerLocator.getObserver !== 'function') {
+      return false;
+    }
+
+    const unsubscribers = [];
+    const propertyKeys = Object.keys(viewModel).filter(k =>
+      !k.startsWith('$') &&
+      !k.startsWith('_') &&
+      typeof viewModel[k] !== 'function'
+    );
+
+    for (const key of propertyKeys) {
+      try {
+        const observer = observerLocator.getObserver(viewModel, key);
+        if (!observer || typeof observer.subscribe !== 'function') continue;
+
+        const subscriber = {
+          handleChange(newValue, oldValue) {
+            const serializedNew = serializePropertyValue(newValue);
+            const serializedOld = serializePropertyValue(oldValue);
+            emitDevtoolsEvent('aurelia-devtools:property-change', {
+              componentKey,
+              propertyName: key,
+              newValue: serializedNew.value,
+              oldValue: serializedOld.value,
+              newType: serializedNew.type,
+              oldType: serializedOld.type,
+              timestamp: Date.now()
+            });
+          }
+        };
+
+        observer.subscribe(subscriber);
+        unsubscribers.push(() => {
+          try { observer.unsubscribe(subscriber); } catch {}
+        });
+      } catch {}
+    }
+
+    if (unsubscribers.length > 0) {
+      activePropertyWatchers.set(componentKey, { unsubscribers, viewModel });
+      return true;
+    }
+
+    return false;
+  }
+
+  function detachPropertyWatchers(componentKey) {
+    if (!componentKey) return false;
+
+    const entry = activePropertyWatchers.get(componentKey);
+    if (entry) {
+      for (const unsub of entry.unsubscribers) {
+        try { unsub(); } catch {}
+      }
+      activePropertyWatchers.delete(componentKey);
+      return true;
+    }
+    return false;
+  }
+
+  function detachAllPropertyWatchers() {
+    for (const [key] of activePropertyWatchers) {
+      detachPropertyWatchers(key);
+    }
+  }
+
   function extractLifecycleHooks(controller) {
     if (!controller) return null;
 
@@ -1740,6 +1939,350 @@ function install(debugValueLookup) {
     }
   }
 
+  function getRegistrationCount(container) {
+    try {
+      const resolvers = container._resolvers || container['_resolvers'];
+      if (resolvers && resolvers.size !== undefined) {
+        return resolvers.size;
+      }
+    } catch {}
+    return -1;
+  }
+
+  function getContainerOwnerName(container) {
+    try {
+      if (container.root === container) return 'Root';
+
+      const res = container.res;
+      if (res) {
+        for (const key in res) {
+          if (key.startsWith('au:resource:custom-element:')) {
+            return key.replace('au:resource:custom-element:', '');
+          }
+        }
+      }
+
+      if (container._resolver && container._resolver.Type) {
+        return container._resolver.Type.name || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  function extractContainerHierarchy(controller) {
+    const container = controller.container;
+    if (!container) return null;
+
+    try {
+      const ancestors = [];
+      let current = container;
+      let depthCounter = 0;
+
+      while (current) {
+        ancestors.push({
+          id: typeof current.id === 'number' ? current.id : depthCounter,
+          depth: typeof current.depth === 'number' ? current.depth : depthCounter,
+          isRoot: current.parent === null,
+          registrationCount: getRegistrationCount(current),
+          ownerName: getContainerOwnerName(current)
+        });
+        current = current.parent;
+        depthCounter++;
+      }
+
+      return {
+        current: ancestors[0],
+        ancestors: ancestors.slice(1)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function findProvidingContainerDepth(container, key) {
+    let current = container;
+    let depth = 0;
+
+    while (current) {
+      try {
+        if (typeof current.has === 'function' && current.has(key, false)) {
+          return typeof current.depth === 'number' ? current.depth : depth;
+        }
+      } catch {}
+      current = current.parent;
+      depth++;
+    }
+
+    return -1;
+  }
+
+  function findProvidingContainer(container, key) {
+    let current = container;
+    let depthCounter = 0;
+
+    while (current) {
+      try {
+        if (typeof current.has === 'function' && current.has(key, false)) {
+          return {
+            id: typeof current.id === 'number' ? current.id : depthCounter,
+            depth: typeof current.depth === 'number' ? current.depth : depthCounter,
+            isRoot: current.parent === null,
+            registrationCount: getRegistrationCount(current)
+          };
+        }
+      } catch {}
+      current = current.parent;
+      depthCounter++;
+    }
+
+    return null;
+  }
+
+  function getValueType(value) {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (Array.isArray(value)) return 'Array';
+    const type = typeof value;
+    if (type === 'object' && value.constructor && value.constructor.name !== 'Object') {
+      return value.constructor.name;
+    }
+    return type;
+  }
+
+  function serializeForDevtools(value, depth = 0, maxDepth = 2, seen = new WeakSet()) {
+    if (depth > maxDepth) return '[Max depth]';
+    if (value === null) return null;
+    if (value === undefined) return undefined;
+
+    const type = typeof value;
+
+    if (type === 'string' || type === 'number' || type === 'boolean') {
+      return value;
+    }
+
+    if (type === 'function') {
+      return '[Function: ' + (value.name || 'anonymous') + ']';
+    }
+
+    if (type === 'object') {
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
+
+      if (Array.isArray(value)) {
+        if (value.length > 10) {
+          return '[Array(' + value.length + ')]';
+        }
+        return value.slice(0, 10).map(function(v) {
+          return serializeForDevtools(v, depth + 1, maxDepth, seen);
+        });
+      }
+
+      if (value.constructor && value.constructor.name !== 'Object') {
+        const className = value.constructor.name;
+        const preview = { __type__: className };
+        const keys = Object.keys(value).slice(0, 5);
+        keys.forEach(function(k) {
+          preview[k] = serializeForDevtools(value[k], depth + 1, maxDepth, seen);
+        });
+        return preview;
+      }
+
+      const result = {};
+      const keys = Object.keys(value).slice(0, 10);
+      keys.forEach(function(k) {
+        result[k] = serializeForDevtools(value[k], depth + 1, maxDepth, seen);
+      });
+      return result;
+    }
+
+    return String(value);
+  }
+
+  function getInstancePreview(instance, maxProps) {
+    if (!instance || typeof instance !== 'object') return null;
+
+    try {
+      const preview = {};
+      const keys = Object.keys(instance);
+      let count = 0;
+
+      for (let i = 0; i < keys.length && count < maxProps; i++) {
+        const key = keys[i];
+        if (key.startsWith('_') || key.startsWith('$')) continue;
+
+        const val = instance[key];
+        const type = typeof val;
+
+        if (type === 'function') continue;
+
+        if (type === 'string' || type === 'number' || type === 'boolean' || val === null) {
+          preview[key] = val;
+          count++;
+        } else if (Array.isArray(val)) {
+          preview[key] = '[Array(' + val.length + ')]';
+          count++;
+        } else if (type === 'object') {
+          preview[key] = '{...}';
+          count++;
+        }
+      }
+
+      return Object.keys(preview).length > 0 ? preview : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractEnhancedDependencies(controller) {
+    const version = detectControllerVersion(controller);
+    if (version !== 2) return null;
+
+    const container = controller.container;
+    const Type = controller.definition && controller.definition.Type;
+    if (!Type || !Type.inject || !container) return null;
+
+    try {
+      const deps = [];
+      const injectKeys = Array.isArray(Type.inject) ? Type.inject : [Type.inject];
+
+      injectKeys.forEach(function(key) {
+        const dep = {
+          name: extractKeyName(key) || 'unknown',
+          key: String(key),
+          type: inferDependencyType(key),
+          containerDepth: findProvidingContainerDepth(container, key),
+          containerInfo: findProvidingContainer(container, key),
+          resolvedValue: null,
+          resolvedType: null,
+          instanceName: null,
+          instancePreview: null
+        };
+
+        try {
+          const resolved = container.get(key);
+          dep.resolvedType = getValueType(resolved);
+
+          if (resolved && typeof resolved === 'object') {
+            const ctorName = resolved.constructor ? resolved.constructor.name : null;
+            if (ctorName && ctorName !== 'Object' && ctorName.length > 1) {
+              dep.instanceName = ctorName;
+            }
+            dep.instancePreview = getInstancePreview(resolved, 4);
+          } else {
+            dep.resolvedValue = resolved;
+          }
+        } catch {}
+
+        deps.push(dep);
+      });
+
+      return deps;
+    } catch {
+      return null;
+    }
+  }
+
+  function inferServiceType(key) {
+    const keyStr = String(key);
+    if (keyStr.includes('au:resource:')) {
+      return 'resource';
+    }
+    return inferDependencyType(key);
+  }
+
+  function isInternalAureliaKey(keyStr) {
+    if (keyStr.startsWith('au:')) return true;
+    if (keyStr.startsWith('IWindow')) return true;
+    if (keyStr.startsWith('ILocation')) return true;
+    if (keyStr.startsWith('IHistory')) return true;
+    if (keyStr.includes('__au_')) return true;
+    if (keyStr === 'function Object() { [native code] }') return true;
+    if (keyStr === 'function Array() { [native code] }') return true;
+    return false;
+  }
+
+  function extractAvailableServices(controller) {
+    const version = detectControllerVersion(controller);
+    if (version !== 2) return null;
+
+    const container = controller.container;
+    if (!container) return null;
+
+    try {
+      const services = [];
+      const seen = new Set();
+      let current = container;
+      let isAncestor = false;
+
+      while (current) {
+        try {
+          const resolvers = current._resolvers || current['_resolvers'];
+          if (resolvers && typeof resolvers.forEach === 'function') {
+            resolvers.forEach(function(resolver, key) {
+              const keyStr = String(key);
+
+              if (isInternalAureliaKey(keyStr)) return;
+              if (seen.has(keyStr)) return;
+
+              seen.add(keyStr);
+
+              const name = extractKeyName(key) || keyStr;
+              if (name.length <= 2) return;
+
+              services.push({
+                name: name,
+                key: keyStr,
+                type: inferServiceType(key),
+                isFromAncestor: isAncestor
+              });
+            });
+          }
+        } catch {}
+
+        current = current.parent;
+        isAncestor = true;
+      }
+
+      return services;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractEnhancedDISnapshot(controller) {
+    if (!controller) return null;
+
+    const version = detectControllerVersion(controller);
+    if (version !== 2) {
+      return extractDependencies(controller);
+    }
+
+    try {
+      const result = {
+        version: 2,
+        dependencies: [],
+        containerHierarchy: null,
+        availableServices: []
+      };
+
+      try {
+        result.dependencies = extractEnhancedDependencies(controller) || [];
+      } catch {}
+
+      try {
+        result.containerHierarchy = extractContainerHierarchy(controller);
+      } catch {}
+
+      try {
+        result.availableServices = extractAvailableServices(controller) || [];
+      } catch {}
+
+      return result;
+    } catch {
+      return extractDependencies(controller);
+    }
+  }
+
   function extractRouteInfo(controller) {
     if (!controller) return null;
 
@@ -1821,6 +2364,229 @@ function install(debugValueLookup) {
     } catch {
       return null;
     }
+  }
+
+  function extractTemplateSnapshot(controller) {
+    if (!controller) return null;
+
+    try {
+      const version = detectControllerVersion(controller);
+      const viewModel = controller.viewModel || controller.bindingContext || controller;
+      const componentKey = controller.definition?.key || controller.definition?.name ||
+                          controller.behavior?.elementName || controller.behavior?.attributeName || 'unknown';
+      const componentName = controller.definition?.name ||
+                           controller.behavior?.elementName || controller.behavior?.attributeName || 'unknown';
+
+      const bindings = extractTemplateBindings(controller, version);
+      const controllers = extractTemplateControllers(controller, version);
+
+      let hasSlots = false;
+      let shadowMode = 'none';
+      let isContainerless = false;
+
+      if (version === 2) {
+        const def = controller.definition || controller._compiledDef;
+        hasSlots = def?.hasSlots || false;
+        shadowMode = def?.shadowOptions?.mode || 'none';
+        isContainerless = def?.containerless || false;
+      }
+
+      return {
+        componentKey,
+        componentName,
+        bindings,
+        controllers,
+        instructions: [],
+        hasSlots,
+        shadowMode,
+        isContainerless
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function extractTemplateBindings(controller, version) {
+    const bindings = [];
+    let bindingId = 0;
+
+    try {
+      let bindingList = [];
+
+      if (version === 2) {
+        bindingList = controller.bindings || [];
+      } else {
+        const view = controller.view;
+        bindingList = view?.bindings || [];
+      }
+
+      for (const binding of bindingList) {
+        if (!binding) continue;
+
+        const ast = binding.ast || binding.sourceExpression || binding.expression;
+        if (!ast) continue;
+
+        const kind = ast.$kind || ast.kind || ast.type || (ast.constructor && ast.constructor.name) || 'unknown';
+        const expr = unparseExpression(ast);
+
+        let type = 'property';
+        if (kind === 'Interpolation' || kind === 'InterpolationBinding') {
+          type = 'interpolation';
+        } else if (binding.targetEvent || kind === 'ListenerBinding' || kind === 'Listener') {
+          type = 'listener';
+        } else if (kind === 'RefBinding' || binding.targetProperty === '$ref') {
+          type = 'ref';
+        } else if (kind === 'LetBinding') {
+          type = 'let';
+        } else if (binding.targetAttribute || kind === 'AttributeBinding') {
+          type = 'attribute';
+        }
+
+        let mode = 'default';
+        if (binding.mode !== undefined) {
+          const modeMap = { 0: 'default', 1: 'oneTime', 2: 'toView', 3: 'fromView', 4: 'twoWay' };
+          mode = modeMap[binding.mode] || 'default';
+        } else if (binding.updateSource && binding.updateTarget) {
+          mode = 'twoWay';
+        } else if (binding.updateTarget) {
+          mode = 'toView';
+        } else if (binding.updateSource) {
+          mode = 'fromView';
+        }
+
+        let value = undefined;
+        let valueType = 'unknown';
+        try {
+          if (binding._value !== undefined) {
+            value = binding._value;
+          } else if (binding.value !== undefined) {
+            value = binding.value;
+          } else if (binding._scope && ast) {
+            const scope = binding._scope;
+            if (scope.bindingContext) {
+              const propName = ast.name || (ast.object && ast.object.name);
+              if (propName && scope.bindingContext[propName] !== undefined) {
+                value = scope.bindingContext[propName];
+              }
+            }
+          }
+          valueType = value === null ? 'null' : value === undefined ? 'undefined' :
+                     Array.isArray(value) ? 'array' : typeof value;
+          if (valueType === 'object' || valueType === 'array') {
+            value = formatPreview(value);
+          }
+        } catch {}
+
+        const target = binding.targetProperty || binding.targetEvent || binding.targetAttribute || 'unknown';
+
+        bindings.push({
+          id: `binding-${bindingId++}`,
+          type,
+          expression: expr,
+          target,
+          value,
+          valueType,
+          mode,
+          isBound: binding.isBound !== false
+        });
+      }
+    } catch {}
+
+    return bindings;
+  }
+
+  function extractTemplateControllers(controller, version) {
+    const controllers = [];
+    let controllerId = 0;
+
+    try {
+      const children = controller.children || [];
+
+      for (const child of children) {
+        if (!child) continue;
+
+        const defName = child.definition?.name || child.vmKind || '';
+        const vmKind = child.vmKind;
+
+        if (vmKind === 'synthetic' || defName === 'if' || defName === 'else' ||
+            defName === 'repeat' || defName === 'with' || defName === 'switch' ||
+            defName === 'case' || defName === 'au-slot' || defName === 'portal') {
+
+          const vm = child.viewModel;
+          let type = defName || 'other';
+          let expression = '';
+          let isActive = child.isActive !== false;
+          let condition = undefined;
+          let items = undefined;
+          let itemCount = undefined;
+          let localVariable = undefined;
+          let cachedViews = undefined;
+
+          if (type === 'if' || type === 'else') {
+            condition = vm?.value;
+            isActive = !!condition;
+            if (vm?.ifView) cachedViews = 1;
+            if (vm?.elseView) cachedViews = (cachedViews || 0) + 1;
+          }
+
+          if (type === 'repeat') {
+            const repeatVm = vm;
+            localVariable = repeatVm?.local;
+            itemCount = repeatVm?.items?.length ?? repeatVm?._normalizedItems?.length ?? 0;
+
+            if (repeatVm?.forOf) {
+              expression = unparseExpression(repeatVm.forOf);
+            }
+
+            const maxItems = 10;
+            items = [];
+            const normalizedItems = repeatVm?._normalizedItems || repeatVm?.items || [];
+            const count = Math.min(normalizedItems.length, maxItems);
+
+            for (let i = 0; i < count; i++) {
+              const itemValue = normalizedItems[i];
+              items.push({
+                index: i,
+                value: formatPreview(itemValue),
+                isFirst: i === 0,
+                isLast: i === normalizedItems.length - 1,
+                isEven: i % 2 === 0,
+                isOdd: i % 2 === 1
+              });
+            }
+
+            if (normalizedItems.length > maxItems) {
+              items.push({
+                index: maxItems,
+                value: `... and ${normalizedItems.length - maxItems} more`,
+                isFirst: false,
+                isLast: true,
+                isEven: false,
+                isOdd: false
+              });
+            }
+          }
+
+          controllers.push({
+            id: `tc-${controllerId++}`,
+            type,
+            name: defName,
+            expression,
+            isActive,
+            condition,
+            items,
+            itemCount,
+            localVariable,
+            cachedViews
+          });
+        }
+
+        const nestedControllers = extractTemplateControllers(child, version);
+        controllers.push(...nestedControllers);
+      }
+    } catch {}
+
+    return controllers;
   }
 
   return { hooks, debugValueLookup };
@@ -3357,3 +4123,8 @@ chrome.runtime.onConnect.addListener((port) => {
 chrome.devtools.network.onNavigated.addListener(() => {
   installHooksIfAllowed();
 });
+
+// Initialize: create sidebar only (no top-level panel)
+// Must be at the end of the file after hooksAsStringv2 is defined
+initializeDetectionState();
+createElementsSidebar();

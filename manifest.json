@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aurelia Inspector",
-  "version": "0.2",
+  "version": "1.0.0",
   "description": "Chrome DevTools extension for inspecting Aurelia v1 and v2 applications.",
   "author": "Aurelia Team",
   "devtools_page": "devtools/devtools.html",
@@ -14,7 +14,8 @@
     {
       "resources": [
         "devtools/devtools.html",
-        "devtools-background.html"
+        "devtools-background.html",
+        "sidebar.html"
       ],
       "matches": [
         "*://*/*"
