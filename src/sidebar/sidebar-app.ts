@@ -63,6 +63,7 @@ export class SidebarApp implements ICustomElementViewModel {
   expandedSections: Record<string, boolean> = {
     bindables: true,
     properties: true,
+    context: true,
     controller: false,
     attributes: false,
     lifecycle: false,
@@ -271,12 +272,14 @@ export class SidebarApp implements ICustomElementViewModel {
       this.selectedElement = elementInfo;
       this.selectedElement.bindables = this.selectedElement.bindables || [];
       this.selectedElement.properties = this.selectedElement.properties || [];
+      this.selectedElement.overrideContext = this.selectedElement.overrideContext || [];
       this.selectedElementAttributes = attributesInfo;
       this.selectedNodeType = 'custom-element';
     } else if (attributesInfo.length > 0) {
       this.selectedElement = attributesInfo[0];
       this.selectedElement.bindables = this.selectedElement.bindables || [];
       this.selectedElement.properties = this.selectedElement.properties || [];
+      this.selectedElement.overrideContext = this.selectedElement.overrideContext || [];
       this.selectedElementAttributes = [];
       this.selectedNodeType = 'custom-attribute';
     } else {
@@ -692,6 +695,10 @@ export class SidebarApp implements ICustomElementViewModel {
     return (this.selectedElement?.properties?.length ?? 0) > 0;
   }
 
+  get hasOverrideContext(): boolean {
+    return (this.selectedElement?.overrideContext?.length ?? 0) > 0;
+  }
+
   get hasController(): boolean {
     return !!(this.selectedElement as any)?.controller?.properties?.length;
   }
@@ -1003,6 +1010,7 @@ export class SidebarApp implements ICustomElementViewModel {
       },
       bindables: this.serializeProperties(this.selectedElement.bindables || []),
       properties: this.serializeProperties(this.selectedElement.properties || []),
+      overrideContext: this.serializeProperties(this.selectedElement.overrideContext || []),
       customAttributes: this.selectedElementAttributes.map(attr => ({
         name: attr.name,
         bindables: this.serializeProperties(attr.bindables || []),
@@ -1059,6 +1067,9 @@ export class SidebarApp implements ICustomElementViewModel {
   }
 
   getPropertyTypeClass(type: string): string {
+    if (type?.startsWith('context-')) {
+      type = type.replace('context-', '');
+    }
     const typeMap: Record<string, string> = {
       string: 'type-string',
       number: 'type-number',
