@@ -283,6 +283,7 @@ function install(debugValueLookup) {
     replayInteraction: (id) => replayInteraction(id),
     applyInteractionSnapshot: (id, phase) => applyInteractionSnapshot(id, phase),
     clearInteractionLog: () => clearInteractionLog(),
+    getOverrideContextForNode: (node) => resolveOverrideContextFromNode(node),
     startInteractionRecording: () => startInteractionRecording(),
     stopInteractionRecording: () => stopInteractionRecording(),
     getAllInfo: (root) => {
@@ -575,6 +576,7 @@ function install(debugValueLookup) {
           bindings: [],
           interpolations: [],
           nearestComponent: null,
+          overrideContext: null,
         };
 
         // Find nearest Aurelia controller by walking up the DOM
@@ -618,15 +620,26 @@ function install(debugValueLookup) {
         if (!view || !view.bindings) return result;
 
         // Find bindings that target this node
+        let firstScopeContext = null;
         for (const binding of view.bindings) {
           if (!binding) continue;
 
           const bindingTarget = binding.target || binding.targetNode;
           const isTargetMatch = bindingTarget === node ||
             (node.nodeType === 3 && bindingTarget === node.parentElement) ||
-            (bindingTarget && bindingTarget.contains && bindingTarget.contains(node));
+            (bindingTarget && bindingTarget.contains && bindingTarget.contains(node)) ||
+            // handle text nodes under the selected element
+            (node.nodeType === 1 && bindingTarget && bindingTarget.nodeType === 3 && bindingTarget.parentElement === node);
 
           if (!isTargetMatch) continue;
+
+          // Capture the scope/overrideContext associated with this binding (repeat item)
+          if (!firstScopeContext) {
+            const scope = binding.scope || binding._scope || binding.$scope || binding.sourceScope || binding.$context || null;
+            if (scope && scope.overrideContext) {
+              firstScopeContext = scope.overrideContext;
+            }
+          }
 
           const ast = binding.ast || binding.sourceExpression || binding.expression;
           if (!ast) continue;
@@ -646,6 +659,13 @@ function install(debugValueLookup) {
               mode: binding.mode || (binding.updateSource ? 'two-way' : 'to-view'),
             });
           }
+        }
+
+        if (firstScopeContext) {
+          result.overrideContext = convertObjectToDebugInfo(
+            firstScopeContext,
+            { bindingContext: true, parentOverrideContext: true, $this: true }
+          );
         }
 
         return result;
@@ -2893,6 +2913,145 @@ function install(debugValueLookup) {
     return value;
   }
 
+  function resolveOverrideContextFromNode(node) {
+    try {
+      if (!node) return null;
+
+      const toDebug = (ctx) =>
+        ctx
+          ? convertObjectToDebugInfo(ctx, {
+              bindingContext: true,
+              parentOverrideContext: true,
+              $this: true,
+            })
+          : null;
+
+      // 0) Binding-targeted scope (most precise for repeat items)
+      try {
+        const bindingInfo = hooks.getNodeBindingInfo ? hooks.getNodeBindingInfo(node) : null;
+        if (bindingInfo && bindingInfo.overrideContext && bindingInfo.overrideContext.properties?.length) {
+          return bindingInfo.overrideContext;
+        }
+      } catch {}
+
+      // Helper: try a controller-ish object for its view/scope
+      const tryControllerContext = (ctrl) => {
+        if (!ctrl) return null;
+        const scope =
+          ctrl.scope ||
+          ctrl.$scope ||
+          ctrl.context ||
+          (ctrl.view && (ctrl.view.scope || ctrl.view.$scope)) ||
+          (ctrl.viewModel && ctrl.viewModel.$controller && ctrl.viewModel.$controller.scope) ||
+          null;
+        if (scope && scope.overrideContext) return scope.overrideContext;
+        if (ctrl.view && ctrl.view.overrideContext) return ctrl.view.overrideContext;
+        return null;
+      };
+
+      // 1) Direct node controllers (AU1 & AU2)
+      if (node.au) {
+        // AU1: element.au entries
+        const au = node.au;
+        // controller
+        const ctx = tryControllerContext(au.controller);
+        if (ctx) return toDebug(ctx);
+        // any other controllers on the element (custom attributes, repeat/if/with)
+        for (const key of Object.keys(au)) {
+          const maybe = tryControllerContext(au[key]);
+          if (maybe) return toDebug(maybe);
+        }
+      }
+      if (node['$au']) {
+        // AU2: $au resource bag
+        const au2 = node['$au'];
+        const ce = au2['au:resource:custom-element'];
+        const ctx = tryControllerContext(ce);
+        if (ctx) return toDebug(ctx);
+        // other resources (custom attributes/template controllers)
+        for (const key of Object.keys(au2)) {
+          const maybe = tryControllerContext(au2[key]);
+          if (maybe) return toDebug(maybe);
+        }
+      }
+
+      // 2) Owning view (AU1) discovered via DOM anchors
+      const view = typeof findOwningViewOfNode === 'function' ? findOwningViewOfNode(node) : null;
+      if (view && view.overrideContext) {
+        return toDebug(view.overrideContext);
+      }
+
+      // 3) Walk up DOM to find any parent with controllers/scopes
+      let el = node.nodeType === 1 ? node : node.parentElement;
+      while (el && el !== document.body) {
+        if (el.au) {
+          const au = el.au;
+          if (au.controller) {
+            const ctx = tryControllerContext(au.controller);
+            if (ctx) return toDebug(ctx);
+          }
+          for (const key of Object.keys(au)) {
+            const maybe = tryControllerContext(au[key]);
+            if (maybe) return toDebug(maybe);
+          }
+        }
+
+        if (el['$au']) {
+          const au2 = el['$au'];
+          const ce = au2['au:resource:custom-element'];
+          const ctx = tryControllerContext(ce);
+          if (ctx) return toDebug(ctx);
+          for (const key of Object.keys(au2)) {
+            const maybe = tryControllerContext(au2[key]);
+            if (maybe) return toDebug(maybe);
+          }
+        }
+
+        el = el.parentElement;
+      }
+    } catch {}
+
+    return null;
+  }
+
+  function extractOverrideContext(controller) {
+    try {
+      let scope =
+        (controller && (controller.scope || controller.$scope || controller.$context || controller.context)) ||
+        (controller && controller.view && (controller.view.scope || controller.view.$scope)) ||
+        null;
+
+      if (!scope && controller && controller.viewModel && controller.viewModel.$controller) {
+        const childController = controller.viewModel.$controller;
+        scope = childController.scope || childController.$scope || null;
+      }
+
+      const overrideContext =
+        (scope && scope.overrideContext) ||
+        (controller && controller.view && controller.view.overrideContext) ||
+        null;
+
+      if (!overrideContext) return null;
+
+      const ctxInfo = convertObjectToDebugInfo(
+        overrideContext,
+        { bindingContext: true, parentOverrideContext: true, $this: true }
+      );
+
+      if (!ctxInfo || !ctxInfo.properties || !ctxInfo.properties.length) return null;
+
+      return ctxInfo.properties.map((prop) => {
+        prop.canEdit = false;
+        if (['string', 'number', 'boolean', 'null', 'undefined', 'bigint'].includes(prop.type)) {
+          prop.type = 'context-' + prop.type;
+        }
+        return prop;
+      });
+    } catch {
+      return null;
+    }
+  }
+
   function extractControllerInfo(controller) {
     if (!controller) return null;
 
@@ -2901,6 +3060,7 @@ function install(debugValueLookup) {
       if (controller.definition && controller.viewModel) {
         const interpolationMap = extractInterpolationMap(controller);
         const bindableKeys = Object.keys(controller.definition.bindables || {});
+        const overrideContext = extractOverrideContext(controller);
         const properties = Object.keys(controller.viewModel)
           .filter((x) => !bindableKeys.some((y) => y === x))
           .filter((x) => !x.startsWith("$"))
@@ -2956,6 +3116,7 @@ function install(debugValueLookup) {
           name: controller.definition.name,
           aliases: controller.definition.aliases || [],
           key: controller.definition.key,
+          overrideContext: overrideContext || [],
           // Expose controller internals for inspection (exclude viewModel to avoid duplication)
           controller: convertObjectToDebugInfo(controller, { viewModel: true })
         };
@@ -2967,6 +3128,7 @@ function install(debugValueLookup) {
         const viewModel = controller.viewModel;
         const bindableProperties = behavior.properties || [];
         const bindableKeys = bindableProperties.map(prop => prop.name);
+        const overrideContext = extractOverrideContext(controller);
         const properties = Object.keys(viewModel)
           .filter((x) => !bindableKeys.some((y) => y === x))
           .filter((x) => !x.startsWith("$") && !denyListProps.includes(x))
@@ -3022,6 +3184,7 @@ function install(debugValueLookup) {
           name: behavior.elementName || behavior.attributeName,
           aliases: [],
           key: behavior.elementName || behavior.attributeName,
+          overrideContext: overrideContext || [],
           controller: convertObjectToDebugInfo(controller, { viewModel: true })
         };
       }
@@ -3029,6 +3192,7 @@ function install(debugValueLookup) {
       else if (controller.viewModel || controller.bindingContext) {
         const viewModel = controller.viewModel || controller.bindingContext;
         const name = controller.name || controller.constructor?.name || 'unknown';
+        const overrideContext = extractOverrideContext(controller);
         const properties = Object.keys(viewModel)
           .filter((x) => !x.startsWith("$") && !denyListProps.includes(x))
           .map((y) => {
@@ -3069,6 +3233,7 @@ function install(debugValueLookup) {
           name: name,
           aliases: [],
           key: name,
+          overrideContext: overrideContext || [],
         };
       }
       // Handle cases where controller itself is the viewModel
@@ -3088,6 +3253,7 @@ function install(debugValueLookup) {
           name: name,
           aliases: [],
           key: name,
+          overrideContext: [],
         };
       }
     } catch (error) {

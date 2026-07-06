@@ -83,6 +83,7 @@ export class SidebarDebugHost {
         let info = null;
         let isBindingContext = false;
         const selectedTagName = target.tagName ? target.tagName.toLowerCase() : 'unknown';
+        const overrideContext = hook.getOverrideContextForNode ? hook.getOverrideContextForNode(target) : null;
 
         if (hook.getCustomElementInfo) {
           info = hook.getCustomElementInfo(target, false);
@@ -116,6 +117,27 @@ export class SidebarDebugHost {
             }
             el = el.parentElement;
           }
+        }
+
+        if (info && info.customElementInfo && overrideContext?.properties?.length) {
+          if (!info.customElementInfo.overrideContext || !info.customElementInfo.overrideContext.length) {
+            info.customElementInfo.overrideContext = overrideContext.properties;
+          }
+        }
+
+        if ((!info || (!info.customElementInfo && (!info.customAttributesInfo || !info.customAttributesInfo.length))) && overrideContext?.properties?.length) {
+          info = {
+            customElementInfo: {
+              name: 'binding context',
+              aliases: [],
+              key: '__binding_context__',
+              bindables: [],
+              properties: [],
+              overrideContext: overrideContext.properties
+            },
+            customAttributesInfo: []
+          };
+          isBindingContext = true;
         }
 
         if (!info) return null;

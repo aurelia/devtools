@@ -80,6 +80,7 @@ describe('SidebarApp', () => {
     app.expandedSections = {
       bindables: true,
       properties: true,
+      context: true,
       controller: false,
       attributes: false,
       lifecycle: false,

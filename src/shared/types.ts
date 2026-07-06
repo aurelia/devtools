@@ -26,6 +26,7 @@ export interface IControllerInfo {
   key: CustomElementDefinition['key'] | CustomAttributeDefinition['key'];
   bindables: Property[];
   properties: Property[];
+  overrideContext?: Property[];
   controller?: { properties: Property[] };
 }
 

@@ -212,6 +212,36 @@
           </div>
         </div>
 
+        <!-- Repeat Context -->
+        <div if.bind="hasOverrideContext" class="section">
+          <div class="section-header" click.trigger="toggleSection('context')">
+            <span class="expand-icon">${expandedSections.context ? '&#9660;' : '&#9654;'}</span>
+            <span class="section-title">Repeat Context</span>
+            <span class="section-count">${selectedElement.overrideContext.length}</span>
+          </div>
+          <div if.bind="expandedSections.context" class="section-content">
+            <div repeat.for="row of getPropertyRows(selectedElement.overrideContext, propertyRowsRevision)"
+                 class="property-row"
+                 style="padding-left: ${8 + row.depth * 12}px">
+              <button if.bind="row.property.canExpand"
+                      class="expand-btn"
+                      click.trigger="togglePropertyExpansion(row.property)">
+                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
+              </button>
+              <span class="property-name">${row.property.name}</span>
+              <span class="property-colon">:</span>
+              <span class="property-value ${getPropertyTypeClass(row.property.type)}">
+                ${formatPropertyValue(row.property.value)}
+              </span>
+              <button class="copy-btn ${isPropertyCopied(row.property) ? 'copied' : ''}"
+                      click.trigger="copyPropertyValue(row.property, $event)"
+                      title="Copy value">
+                ${isPropertyCopied(row.property) ? '&#10003;' : '&#128203;'}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- Controller -->
         <div if.bind="hasController" class="section">
           <div class="section-header" click.trigger="toggleSection('controller')">
