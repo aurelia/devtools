@@ -540,7 +540,7 @@ export class SidebarDebugHost {
                   const name = node.customElementInfo.name || '';
                   if (name.toLowerCase().includes(query)) {
                     results.push({
-                      key: node.customElementInfo.key || name,
+                      key: node.customElementInfo.instanceId || node.customElementInfo.key || name,
                       name: name,
                       type: 'custom-element'
                     });
@@ -550,7 +550,7 @@ export class SidebarDebugHost {
                   for (const attr of node.customAttributesInfo) {
                     if (attr && attr.name && attr.name.toLowerCase().includes(query)) {
                       results.push({
-                        key: attr.key || attr.name,
+                        key: attr.instanceId || attr.key || attr.name,
                         name: attr.name,
                         type: 'custom-attribute'
                       });
@@ -570,7 +570,7 @@ export class SidebarDebugHost {
                   const name = item.customElementInfo.name || '';
                   if (name.toLowerCase().includes(query)) {
                     results.push({
-                      key: item.customElementInfo.key || name,
+                      key: item.customElementInfo.instanceId || item.customElementInfo.key || name,
                       name: name,
                       type: 'custom-element'
                     });
@@ -616,7 +616,7 @@ export class SidebarDebugHost {
               if (!nodes) return null;
               for (const node of nodes) {
                 if (node.customElementInfo) {
-                  const nodeKey = node.customElementInfo.key || node.customElementInfo.name;
+                  const nodeKey = node.customElementInfo.instanceId || node.customElementInfo.key || node.customElementInfo.name;
                   if (nodeKey === targetKey) {
                     return {
                       customElementInfo: node.customElementInfo,
@@ -626,7 +626,7 @@ export class SidebarDebugHost {
                 }
                 if (node.customAttributesInfo) {
                   for (const attr of node.customAttributesInfo) {
-                    const attrKey = attr.key || attr.name;
+                    const attrKey = attr.instanceId || attr.key || attr.name;
                     if (attrKey === targetKey) {
                       return {
                         customElementInfo: null,
@@ -653,7 +653,7 @@ export class SidebarDebugHost {
             const flat = hook.getAllInfo() || [];
             for (const item of flat) {
               if (item.customElementInfo) {
-                const nodeKey = item.customElementInfo.key || item.customElementInfo.name;
+                const nodeKey = item.customElementInfo.instanceId || item.customElementInfo.key || item.customElementInfo.name;
                 if (nodeKey === targetKey) {
                   result = {
                     customElementInfo: item.customElementInfo,

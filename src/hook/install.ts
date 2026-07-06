@@ -1,248 +1,7 @@
-let detectedVersion = null;
-let elementsSidebarPane = null;
-let sidebarCreated = false;
-
-const optOutCheckExpression = `
-  (function() {
-    try {
-      const w = window;
-      const doc = w.document;
-      const meta = doc && doc.querySelector('meta[name="aurelia-devtools"]');
-      const metaContent = (meta && meta.getAttribute('content') || '').toLowerCase();
-      const rootAttr = (doc && doc.documentElement && doc.documentElement.getAttribute('data-aurelia-devtools') || '').toLowerCase();
-      const disabled =
-        w.__AURELIA_DEVTOOLS_DISABLED__ === true ||
-        w.__AURELIA_DEVTOOLS_DISABLE__ === true ||
-        w.AURELIA_DEVTOOLS_DISABLE === true ||
-        metaContent.includes('disable') ||
-        metaContent.includes('off') ||
-        rootAttr === 'disable' ||
-        rootAttr === 'disabled' ||
-        rootAttr === 'off';
-      if (disabled) {
-        w.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'disabled';
-        w.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = null;
-        w.__AURELIA_DEVTOOLS_VERSION__ = null;
-      }
-      return disabled;
-    } catch (e) {
-      return false;
-    }
-  })()
-`;
-
-function installHooksIfAllowed() {
-  // hooksAsStringv2 contains its own opt-out guard; a lightweight single eval keeps installation robust
-  chrome.devtools.inspectedWindow.eval(hooksAsStringv2);
-}
-
-// Set initial detection state
-function initializeDetectionState() {
-  chrome.devtools.inspectedWindow.eval(`
-    if (!(${optOutCheckExpression})) {
-      window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'checking';
-    }
-  `);
-  installHooksIfAllowed();
-}
-
-// Create an enhanced Elements sidebar - this is now the primary UI
-function createElementsSidebar() {
-  if (!chrome?.devtools?.panels?.elements?.createSidebarPane) return;
-  if (elementsSidebarPane) return;
-
-  chrome.devtools.panels.elements.createSidebarPane('Aurelia', function(pane) {
-    elementsSidebarPane = pane;
-    sidebarCreated = true;
-
-    let pageSet = false;
-    try {
-      // Use the new sidebar-specific HTML page
-      // Path is relative to extension root, not devtools folder
-      pane.setPage('../sidebar.html');
-      pageSet = true;
-    } catch (error) {
-      console.error('Failed to set sidebar page:', error);
-      pageSet = false;
-    }
-
-    // Ensure hooks are installed when sidebar opens
-    installHooksIfAllowed();
-
-    if (pageSet) {
-      try {
-        pane.onShown.addListener(() => installHooksIfAllowed());
-      } catch {}
-    } else {
-      // Fallback to setExpression if setPage fails
-      const updateSidebar = () => {
-        if (!elementsSidebarPane) return;
-        const expr = `(() => {
-          try {
-            const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
-            if (!hook) {
-              return { status: 'no-hook', message: 'Aurelia DevTools hook not available' };
-            }
-
-            const result = {
-              status: 'ok',
-              selectedNode: {
-                nodeType: $0 ? $0.nodeType : null,
-                nodeName: $0 ? $0.nodeName : null,
-              },
-            };
-
-            // Get binding info for the selected node
-            if (hook.getNodeBindingInfo) {
-              const bindingInfo = hook.getNodeBindingInfo($0);
-              if (bindingInfo) {
-                if (bindingInfo.interpolations && bindingInfo.interpolations.length) {
-                  result.interpolations = bindingInfo.interpolations.map(i => i.expression);
-                }
-                if (bindingInfo.bindings && bindingInfo.bindings.length) {
-                  result.bindings = bindingInfo.bindings.map(b => ({
-                    expression: b.expression,
-                    target: b.targetProperty,
-                    mode: b.mode,
-                  }));
-                }
-                if (bindingInfo.nearestComponent) {
-                  result.nearestComponent = bindingInfo.nearestComponent.name;
-                }
-              }
-            }
-
-            // Get component info if available
-            if (hook.getCustomElementInfo) {
-              const info = hook.getCustomElementInfo($0, true);
-              if (info && (info.customElementInfo || (info.customAttributesInfo && info.customAttributesInfo.length))) {
-                if (info.customElementInfo) {
-                  result.component = info.customElementInfo.name;
-                  result.componentBindables = (info.customElementInfo.bindables || []).map(b => b.name + ': ' + b.value);
-                }
-                if (info.customAttributesInfo && info.customAttributesInfo.length) {
-                  result.customAttributes = info.customAttributesInfo.map(a => a.name);
-                }
-              }
-            }
-
-            // Check if we have any useful info
-            const hasInfo = result.interpolations || result.bindings || result.component || result.customAttributes;
-            if (!hasInfo) {
-              return { status: 'no-aurelia', message: 'No Aurelia bindings found for this node' };
-            }
-
-            return result;
-          } catch (e) { return { status: 'error', message: String(e && e.message || e) }; }
-        })()`;
-        try {
-          elementsSidebarPane.setExpression(expr, 'Aurelia');
-        } catch (e) {
-          elementsSidebarPane.setObject({ message: 'Unable to evaluate Aurelia info' }, 'Aurelia');
-        }
-      };
-
-      try { pane.onShown.addListener(updateSidebar); } catch {}
-      chrome.devtools.panels.elements.onSelectionChanged.addListener(updateSidebar);
-      updateSidebar();
-    }
-  });
-}
-
-// Update detection state when version is detected
-function updateDetectionState(version) {
-  chrome.devtools.inspectedWindow.eval(`
-    window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = ${version};
-    window.__AURELIA_DEVTOOLS_VERSION__ = ${version};
-    window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'detected';
-  `);
-}
-
-// Listen for Aurelia detection messages
-chrome.runtime.onMessage.addListener((req, sender) => {
-  if (sender.tab && req.aureliaDetected && req.version) {
-    chrome.devtools.inspectedWindow.eval(optOutCheckExpression, (disabled, isException) => {
-      if (isException || disabled) return;
-      detectedVersion = req.version;
-      updateDetectionState(req.version);
-    });
-  }
-});
-
-// Also try to detect immediately when devtools opens
-// This handles the case where Aurelia was already detected before devtools opened
-chrome.devtools.inspectedWindow.eval(
-  `
-  // Return the detected version if available, or try to detect
-  (function() {
-    if (${optOutCheckExpression}) {
-      return { status: 'disabled', version: null };
-    }
-
-    if (window.__AURELIA_DEVTOOLS_DETECTED_VERSION__) {
-      return { status: 'detected', version: window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ };
-    }
-
-    // Try to detect Aurelia directly
-    let version = null;
-
-    // Check for Aurelia v1 indicators
-    if (document.querySelector('[aurelia-app]') || window.aurelia) {
-      version = 1;
-    }
-    // Check for Aurelia v2 indicators
-    else if (document.querySelector('*[au-started]') || window.Aurelia) {
-      version = 2;
-    }
-    // Additional v2 check - look for elements with $au property
-    else {
-      const elements = document.querySelectorAll('*');
-      for (let el of elements) {
-        if (el.$au) {
-          version = 2;
-          break;
-        }
-      }
-    }
-    // Additional v1 check - look for elements with .au property
-    if (!version) {
-      const elements = document.querySelectorAll('*');
-      for (let el of elements) {
-        if (el.au && (el.au.controller || Object.keys(el.au).some(key => el.au[key] && el.au[key].behavior))) {
-          version = 1;
-          break;
-        }
-      }
-    }
-
-    if (version) {
-      window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ = version;
-      window.__AURELIA_DEVTOOLS_VERSION__ = version;
-      window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'detected';
-      return { status: 'detected', version };
-    }
-
-    window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'not-found';
-    return { status: 'not-found', version: null };
-  })();
-`,
-  (result, isException) => {
-    if (isException) {
-      return;
-    } else if (result && result.status === 'disabled') {
-      detectedVersion = null;
-    } else if (result && result.status === 'detected' && result.version) {
-      detectedVersion = result.version;
-      updateDetectionState(result.version);
-    } else if (sidebarCreated && result && result.status === 'not-found') {
-      chrome.devtools.inspectedWindow.eval(`
-        window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'not-found';
-      `);
-    }
-  }
-);
-
-function install(debugValueLookup) {
+// Page-side devtools hook. This entire module is injected into the inspected
+// page (world: MAIN) as a self-contained IIFE bundle; it must not reference
+// anything outside the page environment.
+export function install(debugValueLookup: Record<number, any>) {
   const denyListProps = [
     "$controller",
     "$observers",
@@ -252,6 +11,47 @@ function install(debugValueLookup) {
   let nextDebugId = 0;
   if (!debugValueLookup) {
     debugValueLookup = {};
+  }
+
+  // Per-instance component identity. Definition keys are shared by every
+  // instance of a component, so lookups keyed by them always resolve to the
+  // first matching instance; instance ids disambiguate repeated components.
+  let nextInstanceId = 0;
+  const controllerToInstanceId = new WeakMap();
+  const instanceRegistry = new Map();
+
+  function getInstanceId(controller) {
+    let id = controllerToInstanceId.get(controller);
+    if (!id) {
+      id = `aui-${++nextInstanceId}`;
+      controllerToInstanceId.set(controller, id);
+      instanceRegistry.set(
+        id,
+        typeof WeakRef === 'function' ? new WeakRef(controller) : { deref: () => controller }
+      );
+    }
+    return id;
+  }
+
+  function getControllerHost(controller) {
+    if (!controller) return null;
+    return controller.host || controller.element || (controller.view && controller.view.firstChild) || null;
+  }
+
+  function getControllerByInstanceId(instanceId) {
+    if (!instanceId) return null;
+    const ref = instanceRegistry.get(instanceId);
+    if (!ref) return null;
+    const controller = typeof ref.deref === 'function' ? ref.deref() : ref;
+    if (!controller) {
+      instanceRegistry.delete(instanceId);
+      return null;
+    }
+    const host = getControllerHost(controller);
+    if (host && host.isConnected === false) {
+      return null;
+    }
+    return controller;
   }
 
   const MAP_ENTRY_METADATA_KEY =
@@ -400,7 +200,7 @@ function install(debugValueLookup) {
           }
           // Try Aurelia v1
           else {
-            const auV1 = element.au;
+            const auV1 = (element as any).au;
             if (auV1) {
               if (auV1.controller) {
                 customElement = auV1.controller;
@@ -473,35 +273,12 @@ function install(debugValueLookup) {
 
     evaluateInComponentContext(componentKey, expression) {
       try {
-        // Find the component by key
+        // Find the component by instance id or definition key
         let viewModel = null;
 
-        // Try Aurelia v2 first
-        const allElements = document.querySelectorAll('*');
-        for (const element of allElements) {
-          const auV2 = element['$au'];
-          if (auV2) {
-            const ce = auV2['au:resource:custom-element'];
-            if (ce) {
-              const key = ce.definition?.key || ce.definition?.name;
-              const name = ce.definition?.name;
-              if (key === componentKey || name === componentKey) {
-                viewModel = ce.viewModel || ce.instance;
-                break;
-              }
-            }
-          }
-
-          // Try Aurelia v1
-          const auV1 = element.au;
-          if (auV1 && auV1.controller) {
-            const ctrl = auV1.controller;
-            const key = ctrl.behavior?.elementName || ctrl.behavior?.attributeName;
-            if (key === componentKey) {
-              viewModel = ctrl.viewModel || ctrl.bindingContext;
-              break;
-            }
-          }
+        const controller = findControllerByKey(componentKey);
+        if (controller) {
+          viewModel = controller.viewModel || controller.instance || controller.bindingContext || null;
         }
 
         if (!viewModel) {
@@ -514,7 +291,7 @@ function install(debugValueLookup) {
 
         // Serialize the result
         let serializedValue;
-        let resultType = typeof result;
+        let resultType: string = typeof result;
 
         if (result === null) {
           serializedValue = null;
@@ -602,7 +379,7 @@ function install(debugValueLookup) {
           }
 
           // Check Aurelia v1
-          const auV1 = element.au;
+          const auV1 = (element as any).au;
           if (auV1 && auV1.controller) {
             controller = auV1.controller;
             view = controller.view;
@@ -675,7 +452,23 @@ function install(debugValueLookup) {
     },
 
     findElementByComponentInfo(componentInfo) {
-      // Find DOM element that corresponds to the component info
+      // Exact instance match via the registry when an instance id is present
+      const instanceId =
+        componentInfo &&
+        (componentInfo.instanceId ||
+          (componentInfo.customElementInfo && componentInfo.customElementInfo.instanceId) ||
+          (componentInfo.customAttributesInfo &&
+            componentInfo.customAttributesInfo[0] &&
+            componentInfo.customAttributesInfo[0].instanceId));
+      if (instanceId) {
+        const controller = getControllerByInstanceId(instanceId);
+        const host = getControllerHost(controller);
+        if (host && host.nodeType === 1) {
+          return host;
+        }
+      }
+
+      // Fallback: first DOM element whose definition matches the component info
       const allElements = document.querySelectorAll("*");
 
       for (const element of allElements) {
@@ -718,7 +511,7 @@ function install(debugValueLookup) {
         }
         // Try Aurelia v1
         else {
-          const auV1 = element.au;
+          const auV1 = (element as any).au;
           if (auV1) {
             // Check custom element
             if (auV1.controller && componentInfo.customElementInfo) {
@@ -807,7 +600,7 @@ function install(debugValueLookup) {
 
           if (node.customElementInfo && node.customElementInfo.name) {
             simplified.push({
-              key: node.customElementInfo.key || node.customElementInfo.name,
+              key: node.customElementInfo.instanceId || node.customElementInfo.key || node.customElementInfo.name,
               name: node.customElementInfo.name,
               tagName: node.tagName || node.customElementInfo.name,
               type: 'custom-element',
@@ -817,7 +610,7 @@ function install(debugValueLookup) {
                           (node.customAttributesInfo ? node.customAttributesInfo.length : 0),
               children: [
                 ...(node.customAttributesInfo || []).map(attr => ({
-                  key: attr.key || attr.name,
+                  key: attr.instanceId || attr.key || attr.name,
                   name: attr.name,
                   tagName: node.tagName || '',
                   type: 'custom-attribute',
@@ -831,7 +624,7 @@ function install(debugValueLookup) {
           } else if (node.customAttributesInfo && node.customAttributesInfo.length > 0) {
             for (const attr of node.customAttributesInfo) {
               simplified.push({
-                key: attr.key || attr.name,
+                key: attr.instanceId || attr.key || attr.name,
                 name: attr.name,
                 tagName: node.tagName || '',
                 type: 'custom-attribute',
@@ -910,7 +703,7 @@ function install(debugValueLookup) {
     const findListenerFromElement = () => {
       const elements = document.querySelectorAll('*');
       for (const el of elements) {
-        const au = el.au;
+        const au = (el as any).au;
         if (!au) continue;
 
         const controller = au.controller;
@@ -958,7 +751,7 @@ function install(debugValueLookup) {
   }
 
   function patchAddEventListener() {
-    const targetProto = typeof EventTarget !== 'undefined' ? EventTarget.prototype : null;
+    const targetProto = (typeof EventTarget !== 'undefined' ? EventTarget.prototype : null) as any;
     if (!targetProto || targetProto.__auDevtoolsPatched) {
       return;
     }
@@ -1307,7 +1100,7 @@ function install(debugValueLookup) {
       if (attr) return attr.viewModel || attr;
     }
     // Aurelia v1
-    const auV1 = element.au;
+    const auV1 = (element as any).au;
     if (auV1 && auV1.controller && matchesHint(auV1.controller.behavior, hint)) {
       return auV1.controller.viewModel || auV1.controller;
     }
@@ -1460,7 +1253,7 @@ function install(debugValueLookup) {
   function installRouterEventTap() {
     try {
       const hookInstall = () => {
-        const ea = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__?.Aurelia?.container?.get?.({ key: 'IEventAggregator' }) || null;
+        const ea = (window as any).__AURELIA_DEVTOOLS_GLOBAL_HOOK__?.Aurelia?.container?.get?.({ key: 'IEventAggregator' }) || null;
         if (!ea || typeof ea.subscribe !== 'function') return false;
 
         const routerEvents = [
@@ -1513,7 +1306,7 @@ function install(debugValueLookup) {
     } catch {}
   }
 
-  function extractEventInit(event) {
+  function extractEventInit(event: any): any {
     if (!event || typeof event !== 'object') {
       return { bubbles: true, cancelable: true, composed: true };
     }
@@ -1636,6 +1429,11 @@ function install(debugValueLookup) {
   function findControllerByKey(componentKey) {
     if (!componentKey) return null;
 
+    const registered = getControllerByInstanceId(componentKey);
+    if (registered) return registered;
+
+    // Fallback: definition key/name lookup, which resolves to the first
+    // matching instance in the document
     const allElements = document.querySelectorAll('*');
 
     for (const element of allElements) {
@@ -1664,7 +1462,7 @@ function install(debugValueLookup) {
         }
       }
 
-      const auV1 = element.au;
+      const auV1 = (element as any).au;
       if (auV1) {
         if (auV1.controller) {
           const ctrl = auV1.controller;
@@ -2619,7 +2417,7 @@ function install(debugValueLookup) {
       window.dispatchEvent(
         new CustomEvent('aurelia-devtools-ready', {
           detail: {
-            version: window.__AURELIA_DEVTOOLS_VERSION__ || window.__AURELIA_DEVTOOLS_DETECTED_VERSION__ || null,
+            version: (window as any).__AURELIA_DEVTOOLS_VERSION__ || (window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__ || null,
           },
         })
       );
@@ -2701,8 +2499,8 @@ function install(debugValueLookup) {
     };
   }
 
-  function normalizePanelResult(detail, id, label) {
-    const normalized = {
+  function normalizePanelResult(detail: any, id?: any, label?: any): any {
+    const normalized: any = {
       status: typeof detail.status === 'string' ? detail.status : 'ok',
       pluginId: id,
       title: typeof detail.title === 'string' ? detail.title : undefined,
@@ -2835,7 +2633,7 @@ function install(debugValueLookup) {
     return { columns, rows };
   }
 
-  function sanitizeForTransport(value, seen, depth) {
+  function sanitizeForTransport(value: any, seen?: WeakSet<object>, depth?: number) {
     if (value == null) {
       return value;
     }
@@ -2928,7 +2726,7 @@ function install(debugValueLookup) {
 
       // 0) Binding-targeted scope (most precise for repeat items)
       try {
-        const bindingInfo = hooks.getNodeBindingInfo ? hooks.getNodeBindingInfo(node) : null;
+        const bindingInfo: any = hooks.getNodeBindingInfo ? hooks.getNodeBindingInfo(node) : null;
         if (bindingInfo && bindingInfo.overrideContext && bindingInfo.overrideContext.properties?.length) {
           return bindingInfo.overrideContext;
         }
@@ -2985,7 +2783,7 @@ function install(debugValueLookup) {
       let el = node.nodeType === 1 ? node : node.parentElement;
       while (el && el !== document.body) {
         if (el.au) {
-          const au = el.au;
+          const au = (el as any).au;
           if (au.controller) {
             const ctx = tryControllerContext(au.controller);
             if (ctx) return toDebug(ctx);
@@ -3053,6 +2851,14 @@ function install(debugValueLookup) {
   }
 
   function extractControllerInfo(controller) {
+    const info: any = extractControllerInfoCore(controller);
+    if (info) {
+      info.instanceId = getInstanceId(controller);
+    }
+    return info;
+  }
+
+  function extractControllerInfoCore(controller) {
     if (!controller) return null;
 
     try {
@@ -3634,7 +3440,7 @@ function install(debugValueLookup) {
     return undefined;
   }
 
-  function unparseExpression(expr) {
+  function unparseExpression(expr: any): string {
     try {
       const visit = (node) => {
         if (!node) return '';
@@ -3731,7 +3537,7 @@ function install(debugValueLookup) {
     return kind === 'AccessMember' || kind === 'CallMember' || kind === 'AccessKeyed';
   }
 
-  function getFromScope(scope, name, ancestor) {
+  function getFromScope(scope: any, name: any, ancestor?: number) {
     let current = scope || null;
     let steps = typeof ancestor === 'number' ? ancestor : 0;
 
@@ -3799,7 +3605,7 @@ function install(debugValueLookup) {
     }
 
     const expression = extractBindingExpression(binding);
-    const details = { expression };
+    const details: any = { expression };
 
     const ast = binding.ast || binding.sourceExpression || null;
     if (isAccessMemberAst(ast)) {
@@ -3810,7 +3616,7 @@ function install(debugValueLookup) {
     return details;
   }
 
-  function setValueOnDebugInfo(debugInfo, value, instance, overrides) {
+  function setValueOnDebugInfo(debugInfo: any, value: any, instance: any, overrides?: any) {
     try {
       overrides = overrides || {};
       const bindingDetails = isBindingLike(value) ? getBindingDetails(value) : null;
@@ -3917,7 +3723,7 @@ function install(debugValueLookup) {
 
   function createControllerDebugInfo(controller) {
     try {
-      let controllerDebugInfo = {
+      let controllerDebugInfo: any = {
         name:
           controller.behavior.elementName || controller.behavior.attributeName,
       };
@@ -4002,7 +3808,7 @@ function install(debugValueLookup) {
     return { properties };
   }
 
-  function convertObjectToDebugInfo(obj, blackList) {
+  function convertObjectToDebugInfo(obj: any, blackList?: Record<string, boolean>) {
     if (isBindingLike(obj)) {
       return convertBindingToDebugInfo(obj, blackList);
     }
@@ -4027,7 +3833,7 @@ function install(debugValueLookup) {
 
   function getDebugInfoForNode(selectedNode) {
     try {
-      var debugInfo = {};
+      var debugInfo: any = {};
 
       nextDebugId = 0;
 
@@ -4260,37 +4066,3 @@ function install(debugValueLookup) {
     return props;
   }
 }
-/**
- * Manifest v3 approach to evaluate code in the context of the inspected window.
- */
-const hooksAsStringv2 = `
-  (function() {
-    if (${optOutCheckExpression}) {
-      return;
-    }
-    if (window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ && window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.__au_devtools_installed__) {
-      return;
-    }
-    var globalDebugValueLookup = window.__AURELIA_DEVTOOLS_DEBUG_LOOKUP__;
-    var installedData = (${install.toString()})(globalDebugValueLookup);
-    var hooks = installedData.hooks;
-    window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__ = hooks;
-    window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.__au_devtools_installed__ = true;
-    globalDebugValueLookup = installedData.debugValueLookup;
-    window.__AURELIA_DEVTOOLS_DEBUG_LOOKUP__ = globalDebugValueLookup;
-  })();
-  `;
-
-chrome.runtime.onConnect.addListener((port) => {
-  installHooksIfAllowed();
-});
-
-// Also re-install hooks on navigation to handle SPA reloads and page loads
-chrome.devtools.network.onNavigated.addListener(() => {
-  installHooksIfAllowed();
-});
-
-// Initialize: create sidebar only (no top-level panel)
-// Must be at the end of the file after hooksAsStringv2 is defined
-initializeDetectionState();
-createElementsSidebar();

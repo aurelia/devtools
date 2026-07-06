@@ -171,7 +171,7 @@ export class SidebarApp implements ICustomElementViewModel {
   onPropertyChanges(changes: PropertyChangeRecord[], snapshot: PropertySnapshot) {
     if (!changes?.length || !this.selectedElement) return;
 
-    const selectedKey = this.selectedElement.key || this.selectedElement.name;
+    const selectedKey = this.selectedComponentKey;
     if (!selectedKey || snapshot?.componentKey !== selectedKey) return;
 
     let hasUpdates = false;
@@ -288,7 +288,7 @@ export class SidebarApp implements ICustomElementViewModel {
     }
 
     // Start watching for property changes
-    const componentKey = this.selectedElement?.key || this.selectedElement?.name;
+    const componentKey = this.selectedComponentKey;
     if (componentKey) {
       this.debugHost.startPropertyWatching({ componentKey, pollInterval: 500 });
       this.selectedTreeNodeKey = componentKey;
@@ -302,6 +302,11 @@ export class SidebarApp implements ICustomElementViewModel {
     if (!this.componentTree?.length) {
       this.loadComponentTree();
     }
+  }
+
+  get selectedComponentKey(): string | null {
+    if (!this.selectedElement) return null;
+    return this.selectedElement.instanceId || this.selectedElement.key || this.selectedElement.name || null;
   }
 
   clearSelection() {
@@ -624,7 +629,7 @@ export class SidebarApp implements ICustomElementViewModel {
 
   // Enhanced info
   async loadEnhancedInfo(): Promise<void> {
-    const componentKey = this.selectedElement?.key || this.selectedElement?.name;
+    const componentKey = this.selectedComponentKey;
     if (!componentKey) {
       this.clearEnhancedInfo();
       return;
@@ -932,7 +937,7 @@ export class SidebarApp implements ICustomElementViewModel {
       this.expressionHistory = [expression, ...this.expressionHistory.slice(0, 9)];
     }
 
-    const componentKey = this.selectedElement.key || this.selectedElement.name;
+    const componentKey = this.selectedComponentKey;
     if (!componentKey) {
       this.expressionError = 'No component selected';
       return;

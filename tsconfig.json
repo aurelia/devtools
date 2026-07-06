@@ -4,10 +4,15 @@
     "moduleResolution": "node",
     "skipLibCheck": true,
     "target": "ES2017",
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "importHelpers": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
   "include": ["test", "src"],
   "files": ["src/resource.d.ts"]

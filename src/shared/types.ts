@@ -19,6 +19,7 @@ export interface Property {
 }
 
 export interface IControllerInfo {
+  instanceId?: string;
   name: CustomElementDefinition['name'] | CustomAttributeDefinition['name'];
   aliases:
     | CustomElementDefinition['aliases']
