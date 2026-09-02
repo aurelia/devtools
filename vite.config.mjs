@@ -1,8 +1,22 @@
 import { defineConfig } from 'vite';
 import aurelia from '@aurelia/vite-plugin';
-import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'path';
 import copy from 'rollup-plugin-copy';
+
+// Extension scripts run as classic scripts sharing one global scope, so
+// each bundle is wrapped in an IIFE to keep top-level bindings private
+const CLASSIC_SCRIPTS = new Set(['build/detector.js', 'build/contentscript.js', 'build/background.js', 'build/devtools.js']);
+
+function wrapClassicScripts() {
+  return {
+    name: 'aurelia-devtools:wrap-classic-scripts',
+    enforce: 'post',
+    renderChunk(code, chunk) {
+      if (!CLASSIC_SCRIPTS.has(chunk.fileName)) return null;
+      return { code: `(() => {\n${code}\n})();\n`, map: null };
+    }
+  };
+}
 
 export default defineConfig(({ mode }) => {
   const production = mode === 'production';
@@ -29,8 +43,8 @@ export default defineConfig(({ mode }) => {
   return {
     root: '.',
     plugins: [
-      tailwindcss(),
       aurelia(),
+      wrapClassicScripts(),
       copy({
         targets: [
           { src: 'src/popups', dest: 'dist' },
@@ -44,7 +58,7 @@ export default defineConfig(({ mode }) => {
     ],
     build: {
       sourcemap: !production,
-      minify: false,
+      minify: production,
       emptyOutDir: false,
       rollupOptions: {
         input: {

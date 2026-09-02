@@ -1,10 +1,3 @@
-import { IComponentController } from '@aurelia/runtime-html';
-import {
-  CustomElementDefinition,
-  CustomAttributeDefinition,
-} from '@aurelia/runtime-html';
-import Aurelia from 'aurelia';
-
 export interface Property {
   type: string;
   debugId?: number;
@@ -20,11 +13,9 @@ export interface Property {
 
 export interface IControllerInfo {
   instanceId?: string;
-  name: CustomElementDefinition['name'] | CustomAttributeDefinition['name'];
-  aliases:
-    | CustomElementDefinition['aliases']
-    | CustomAttributeDefinition['aliases'];
-  key: CustomElementDefinition['key'] | CustomAttributeDefinition['key'];
+  name: string;
+  aliases: string[];
+  key: string;
   bindables: Property[];
   properties: Property[];
   overrideContext?: Property[];
@@ -135,9 +126,9 @@ export interface ExternalPanelContext extends Record<string, unknown> {
 }
 
 export interface AureliaHooks {
-  currentAttributes: IComponentController[];
-  currentElement: IComponentController;
-  Aurelia?: Aurelia;
+  currentAttributes: unknown[];
+  currentElement: unknown;
+  Aurelia?: unknown;
   getCustomElementInfo?: (e: Element, traverse: boolean) => AureliaInfo;
   getAllInfo: (e: Element) => AureliaInfo[];
   updateValues: (

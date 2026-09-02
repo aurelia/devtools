@@ -12,11 +12,6 @@ afterEach(() => {
   errorSpy?.mockRestore();
 });
 
-declare global {
-  // eslint-disable-next-line no-var
-  var chrome: any;
-}
-
 /** Simple event hub for chrome.* style addListener APIs */
 type Listener = (...args: any[]) => void;
 const mkEvent = () => {

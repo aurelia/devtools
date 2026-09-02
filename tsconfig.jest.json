@@ -1,11 +1,17 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["jest", "node"],
-    "esModuleInterop": true,
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "skipLibCheck": true
+    "types": [
+      "jest",
+      "node",
+      "chrome"
+    ],
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "esModuleInterop": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "src",
+    "tests"
+  ]
 }

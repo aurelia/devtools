@@ -1,9 +1,8 @@
 import './setup';
 import { createFixture } from '@aurelia/testing';
-import { customElement, valueConverter, bindable, IPlatform, Registration } from 'aurelia';
-import { BrowserPlatform } from '@aurelia/platform-browser';
+import { customElement, valueConverter, bindable, IPlatform, Registration, PLATFORM } from 'aurelia';
 
-const platform = new BrowserPlatform(globalThis);
+const platform = PLATFORM;
 
 beforeAll(() => {
   (globalThis as any).__au_platform__ = platform;
@@ -89,16 +88,17 @@ describe('StringifyValueConverter', () => {
     });
 
     it('updates when bound value changes', async () => {
+      class TestApp { value: any = 'initial'; }
       const { appHost, component, startPromise, tearDown } = fixture(
         '<span>${value | stringify}</span>',
-        class TestApp { value: any = 'initial'; },
+        TestApp,
         [StringifyValueConverter]
       );
 
       await startPromise;
       expect(appHost.textContent).toBe('"initial"');
 
-      component.value = { updated: true };
+      (component as TestApp).value = { updated: true };
       await Promise.resolve();
 
       expect(appHost.textContent).toBe('{"updated":true}');

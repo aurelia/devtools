@@ -48,7 +48,7 @@ export default [
       // TS handles undefined identifiers; eslint's no-undef misfires on types
       'no-undef': 'off',
       'no-unused-vars': 'off',
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true }],
       'no-empty': ['error', { allowEmptyCatch: true }],
       'no-prototype-builtins': 'off',
     },
