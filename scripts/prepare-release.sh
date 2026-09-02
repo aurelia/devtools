@@ -109,7 +109,7 @@ echo "==============================="
 
 # Check Node version
 NODE_VERSION=$(node --version | cut -d'v' -f2)
-REQUIRED_NODE="22.0.0"
+REQUIRED_NODE="22.12.0"
 if [ "$(printf '%s\n' "$REQUIRED_NODE" "$NODE_VERSION" | sort -V | head -n1)" != "$REQUIRED_NODE" ]; then
     print_warning "Node.js version $NODE_VERSION detected. Recommended: >= $REQUIRED_NODE"
 else
@@ -158,7 +158,7 @@ print_status "Build completed successfully"
 echo ""
 print_info "Verifying build contents..."
 
-REQUIRED_FILES=("manifest.json" "index.html" "build/entry.js" "build/background.js" "build/contentscript.js" "build/detector.js")
+REQUIRED_FILES=("manifest.json" "sidebar.html" "devtools/devtools.html" "build/sidebar.js" "build/sidebar.css" "build/hook.js" "build/devtools.js" "build/background.js" "build/contentscript.js" "build/detector.js")
 for file in "${REQUIRED_FILES[@]}"; do
     if [ -f "dist/$file" ]; then
         print_status "Found: $file"
