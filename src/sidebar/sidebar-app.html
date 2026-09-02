@@ -1,646 +1,508 @@
 <template>
-  <!-- Extension Invalidated State -->
-  <div if.bind="extensionInvalidated" class="state-message error">
-    <span class="icon">!</span>
-    <div class="content">
-      <strong>Extension Invalidated</strong>
-      <p>Please reload DevTools</p>
-    </div>
+  <div if.bind="extensionInvalidated" class="notice notice-error" role="alert">
+    <p class="notice-title">Extension was reloaded</p>
+    <p>Close and reopen DevTools to reconnect the Aurelia pane.</p>
   </div>
 
-  <!-- Detection States -->
-  <div if.bind="!extensionInvalidated && detectionState === 'checking'" class="state-message">
-    <span class="icon spinner">&#8635;</span>
-    <span>Detecting Aurelia...</span>
+  <div if.bind="isChecking" class="notice" aria-live="polite">
+    <p>Looking for Aurelia…</p>
   </div>
 
-  <div if.bind="!extensionInvalidated && detectionState === 'not-found'" class="state-message warning">
-    <span class="icon">?</span>
-    <span>No Aurelia detected</span>
+  <div if.bind="isNotFound" class="notice">
+    <p class="notice-title">No Aurelia application detected</p>
+    <p>If the app is running, reload the page with DevTools open so the extension can attach.</p>
   </div>
 
-  <div if.bind="!extensionInvalidated && detectionState === 'disabled'" class="state-message">
-    <span class="icon">&#8854;</span>
-    <span>DevTools disabled for this page</span>
+  <div if.bind="isDisabled" class="notice">
+    <p class="notice-title">Aurelia DevTools is disabled on this page</p>
+    <p>The application opted out with the aurelia-devtools meta tag or a global flag.</p>
   </div>
 
-  <!-- Main Content -->
-  <div if.bind="!extensionInvalidated && detectionState === 'detected'" class="sidebar-content">
-    <!-- Toolbar -->
-    <div class="toolbar">
-      <button
-        class="tool-btn ${isElementPickerActive ? 'active' : ''}"
-        click.trigger="toggleElementPicker()"
-        title="Select element from page">
-        <svg viewBox="0 0 16 16" width="14" height="14">
-          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <circle cx="8" cy="8" r="2" fill="currentColor"/>
+  <div if.bind="isDetected" class="sidebar">
+    <div class="toolbar" role="toolbar" aria-label="Aurelia inspector">
+      <button type="button"
+              class="tool-btn ${isElementPickerActive ? 'active' : ''}"
+              aria-pressed="${isElementPickerActive}"
+              title="Pick an element on the page"
+              click.trigger="toggleElementPicker()">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M3 2.5l10 4.2-4.3 1.6L7 12.8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
         </svg>
       </button>
 
-      <div class="search-wrapper">
-        <input
-          type="text"
-          class="search-input"
-          placeholder="Search components..."
-          value.bind="searchQuery"
-          input.trigger="handleSearchInput($event)"
-          focus.trigger="isSearchOpen = searchQuery.length > 0">
-        <button if.bind="searchQuery" class="clear-btn" click.trigger="clearSearch()">&#215;</button>
+      <div class="search">
+        <input type="text"
+               class="search-input"
+               placeholder="Find component"
+               aria-label="Find component"
+               aria-expanded="${isSearchOpen}"
+               autocomplete="off"
+               spellcheck="false"
+               value.bind="searchQuery"
+               input.trigger="onSearchInput($event)"
+               keydown.trigger="onSearchKeydown($event)"
+               focus.trigger="openSearch()"
+               blur.trigger="closeSearch()">
+        <button if.bind="searchQuery"
+                type="button"
+                class="search-clear"
+                title="Clear"
+                aria-label="Clear search"
+                mousedown.trigger="$event.preventDefault()"
+                click.trigger="clearSearch()">×</button>
 
-        <!-- Search Results Dropdown -->
-        <div if.bind="isSearchOpen && searchResults.length" class="search-dropdown">
-          <div
-            repeat.for="result of searchResults"
-            class="search-result"
-            click.trigger="selectSearchResult(result)">
-            <span class="result-icon">${result.type === 'custom-element' ? '&#128230;' : '&#128295;'}</span>
+        <div if.bind="isSearchOpen && searchResults.length" class="search-dropdown" role="listbox">
+          <div repeat.for="result of searchResults"
+               class="search-result ${$index === activeSearchIndex ? 'active' : ''}"
+               role="option"
+               aria-selected="${$index === activeSearchIndex}"
+               mouseenter.trigger="setActiveSearchIndex($index)"
+               mousedown.trigger="selectSearchResult(result, $event)">
+            <span class="result-kind ${result.type}">${result.type === 'custom-attribute' ? 'attr' : 'el'}</span>
             <span class="result-name">${result.name}</span>
           </div>
         </div>
       </div>
 
-      <button
-        class="tool-btn ${followChromeSelection ? 'active' : ''}"
-        click.trigger="toggleFollowChromeSelection()"
-        title="Auto-sync with Elements selection">
-        <svg viewBox="0 0 16 16" width="14" height="14">
-          <path d="M3 8h4v4H3zm6-4h4v4H9z" fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M5 8L9 4" stroke="currentColor" stroke-width="1.5"/>
+      <button type="button"
+              class="tool-btn ${followChromeSelection ? 'active' : ''}"
+              aria-pressed="${followChromeSelection}"
+              title="Follow the Elements panel selection"
+              click.trigger="toggleFollowChromeSelection()">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M6.5 9.5l3-3M5 8l-1.5 1.5a2.1 2.1 0 0 0 3 3L8 11M8 5l1.5-1.5a2.1 2.1 0 0 1 3 3L11 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
         </svg>
       </button>
+
+      <span class="toolbar-version" title="Detected framework version">${versionLabel}</span>
     </div>
 
-    <!-- Component Tree Panel -->
-    <div if.bind="hasComponentTree" class="tree-panel">
-      <div class="tree-header" click.trigger="toggleTreePanel()">
-        <span class="expand-icon">${isTreePanelExpanded ? '&#9660;' : '&#9654;'}</span>
-        <span class="tree-title">Component Tree</span>
-        <span class="tree-count">${componentTreeCount}</span>
-        <button class="refresh-btn" click.trigger="loadComponentTree()" title="Refresh tree">&#8635;</button>
+    <section if.bind="hasComponentTree" class="tree">
+      <div class="tree-header">
+        <button type="button"
+                class="tree-toggle"
+                aria-expanded="${isTreePanelExpanded}"
+                click.trigger="toggleTreePanel()">
+          <span class="disclosure ${isTreePanelExpanded ? 'open' : ''}"></span>
+          <span class="tree-title">Components</span>
+          <span class="tree-count">${componentTreeCount}</span>
+        </button>
+        <button type="button"
+                class="icon-btn"
+                title="Refresh component tree"
+                aria-label="Refresh component tree"
+                click.trigger="loadComponentTree()">
+          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+            <path d="M13 8a5 5 0 1 1-1.5-3.6M13 3v2.5h-2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </button>
       </div>
-      <div if.bind="isTreePanelExpanded" class="tree-content">
-        <div repeat.for="row of getTreeRows(treeRevision)"
-             class="tree-node ${isTreeNodeSelected(row.node) ? 'selected' : ''}"
-             style="padding-left: ${8 + row.depth * 14}px"
-             click.trigger="selectTreeNode(row.node)">
+      <div if.bind="isTreePanelExpanded" class="tree-body" role="tree">
+        <div repeat.for="row of treeRows"
+             class="tree-node ${row.node.key === selectedTreeNodeKey ? 'selected' : ''}"
+             role="treeitem"
+             tabindex="0"
+             aria-selected="${row.node.key === selectedTreeNodeKey}"
+             aria-level="${row.depth + 1}"
+             style="padding-left: ${6 + row.depth * 14}px"
+             click.trigger="selectTreeNode(row.node)"
+             keydown.trigger="onTreeKeydown($event, row.node)">
           <button if.bind="row.node.hasChildren"
-                  class="tree-expand-btn"
-                  click.trigger="toggleTreeNode(row.node, $event)">
-            ${isTreeNodeExpanded(row.node) ? '&#9660;' : '&#9654;'}
-          </button>
-          <span if.bind="!row.node.hasChildren" class="tree-expand-spacer"></span>
-          <span class="tree-node-icon ${row.node.type}">${row.node.type === 'custom-element' ? '&#9670;' : '&#9679;'}</span>
-          <span class="tree-node-name">${row.node.name}</span>
-          <span if.bind="row.node.type === 'custom-attribute'" class="tree-node-badge attr">@</span>
+                  type="button"
+                  tabindex="-1"
+                  class="disclosure ${expandedTreeKeys[row.node.key] ? 'open' : ''}"
+                  aria-label="Toggle children of ${row.node.name}"
+                  click.trigger="toggleTreeNode(row.node, $event)"></button>
+          <span else class="disclosure-spacer"></span>
+          <span class="node-name ${row.node.type}">${row.node.name}</span>
+          <span if.bind="row.node.type === 'custom-attribute'" class="node-kind">attr</span>
         </div>
       </div>
+    </section>
+
+    <div if.bind="!selectedElement" class="empty">
+      <p>Select an element in the Elements panel, or use the picker, to inspect its Aurelia component and binding context.</p>
     </div>
 
-    <!-- No Selection State -->
-    <div if.bind="!selectedElement" class="empty-state">
-      <p>Select an element in the page or Elements panel to inspect its Aurelia bindings.</p>
-    </div>
-
-    <!-- Selected Component -->
     <div if.bind="selectedElement" class="inspector">
-      <!-- Component Header -->
       <div class="component-header">
-        <div class="component-header-info">
-          <div class="component-main-line">
-            <span class="component-icon">${selectedNodeType === 'custom-element' ? '&#128230;' : '&#128295;'}</span>
+        <div class="component-identity">
+          <div class="component-title">
             <span class="component-name">${selectedElement.name}</span>
+            <span class="component-kind">${selectedKindLabel}</span>
           </div>
-          <div if.bind="isShowingBindingContext" class="binding-context-label">
-            <span class="context-indicator">&#8593;</span>
-            <span class="selected-element">&lt;${selectedElementTagName}&gt;</span>
-            <span class="context-text">binding context</span>
+          <div if.bind="isShowingBindingContext" class="context-note">
+            Binding context for <span class="context-tag">&lt;${selectedElementTagName}&gt;</span>
           </div>
         </div>
         <div class="header-actions">
-          <button class="icon-btn" click.trigger="revealInElements()" title="Reveal in Elements">
-            <svg viewBox="0 0 16 16" width="12" height="12">
-              <path d="M8 2v12M4 6l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <button type="button"
+                  class="icon-btn"
+                  title="Reveal in Elements panel"
+                  aria-label="Reveal in Elements panel"
+                  click.trigger="revealInElements()">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path d="M5 3L2.5 8 5 13M11 3l2.5 5L11 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
-          <button
-            class="icon-btn ${isExportCopied ? 'copied' : ''}"
-            click.trigger="exportComponentAsJson()"
-            title="Export as JSON">
-            <svg viewBox="0 0 16 16" width="12" height="12">
-              <rect x="3" y="2" width="8" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
-              <rect x="5" y="4" width="8" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <button type="button"
+                  class="icon-btn ${isExportCopied ? 'copied' : ''}"
+                  title="${isExportCopied ? 'Copied to clipboard' : 'Copy component as JSON'}"
+                  aria-label="Copy component as JSON"
+                  click.trigger="exportComponentAsJson()">
+            <svg if.bind="!isExportCopied" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <rect x="2.5" y="2.5" width="8" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>
+              <path d="M6 5h6.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6" fill="none" stroke="currentColor" stroke-width="1.3"/>
+            </svg>
+            <svg else viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path d="M3 8.5l3.2 3.2L13 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
         </div>
       </div>
 
-      <!-- Sections -->
       <div class="sections">
-        <!-- Bindables -->
-        <div if.bind="hasBindables" class="section">
-          <div class="section-header" click.trigger="toggleSection('bindables')">
-            <span class="expand-icon">${expandedSections.bindables ? '&#9660;' : '&#9654;'}</span>
+        <section if.bind="hasBindables" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.bindables}" click.trigger="toggleSection('bindables')">
+            <span class="disclosure ${expandedSections.bindables ? 'open' : ''}"></span>
             <span class="section-title">Bindables</span>
             <span class="section-count">${selectedElement.bindables.length}</span>
+          </button>
+          <div if.bind="expandedSections.bindables" class="section-body">
+            <property-list properties.bind="selectedElement.bindables" owner.bind="selectedElement" editable.bind="true"></property-list>
           </div>
-          <div if.bind="expandedSections.bindables" class="section-content">
-            <div repeat.for="row of getPropertyRows(selectedElement.bindables, propertyRowsRevision)"
-                 class="property-row"
-                 style="padding-left: ${8 + row.depth * 12}px">
-              <button if.bind="row.property.canExpand"
-                      class="expand-btn"
-                      click.trigger="togglePropertyExpansion(row.property)">
-                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
-              </button>
-              <span class="property-name">${row.property.name}</span>
-              <span class="property-colon">:</span>
-              <span if.bind="!row.property.isEditing"
-                    class="property-value ${getPropertyTypeClass(row.property.type)}"
-                    dblclick.trigger="editProperty(row.property)">
-                ${formatPropertyValue(row.property.value)}
-              </span>
-              <input if.bind="row.property.isEditing"
-                     class="property-editor"
-                     value.bind="row.property.value"
-                     keydown.trigger="$event.key === 'Enter' ? saveProperty(row.property, $event.target.value) : ($event.key === 'Escape' ? cancelPropertyEdit(row.property) : null)"
-                     blur.trigger="saveProperty(row.property, $event.target.value)"
-                     ref="propertyInput">
-              <button class="copy-btn ${isPropertyCopied(row.property) ? 'copied' : ''}"
-                      click.trigger="copyPropertyValue(row.property, $event)"
-                      title="Copy value">
-                ${isPropertyCopied(row.property) ? '&#10003;' : '&#128203;'}
-              </button>
-            </div>
-          </div>
-        </div>
+        </section>
 
-        <!-- Properties -->
-        <div if.bind="hasProperties" class="section">
-          <div class="section-header" click.trigger="toggleSection('properties')">
-            <span class="expand-icon">${expandedSections.properties ? '&#9660;' : '&#9654;'}</span>
+        <section if.bind="hasProperties" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.properties}" click.trigger="toggleSection('properties')">
+            <span class="disclosure ${expandedSections.properties ? 'open' : ''}"></span>
             <span class="section-title">Properties</span>
             <span class="section-count">${selectedElement.properties.length}</span>
+          </button>
+          <div if.bind="expandedSections.properties" class="section-body">
+            <property-list properties.bind="selectedElement.properties" owner.bind="selectedElement" editable.bind="true"></property-list>
           </div>
-          <div if.bind="expandedSections.properties" class="section-content">
-            <div repeat.for="row of getPropertyRows(selectedElement.properties, propertyRowsRevision)"
-                 class="property-row"
-                 style="padding-left: ${8 + row.depth * 12}px">
-              <button if.bind="row.property.canExpand"
-                      class="expand-btn"
-                      click.trigger="togglePropertyExpansion(row.property)">
-                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
-              </button>
-              <span class="property-name">${row.property.name}</span>
-              <span class="property-colon">:</span>
-              <span if.bind="!row.property.isEditing"
-                    class="property-value ${getPropertyTypeClass(row.property.type)}"
-                    dblclick.trigger="editProperty(row.property)">
-                ${formatPropertyValue(row.property.value)}
-              </span>
-              <input if.bind="row.property.isEditing"
-                     class="property-editor"
-                     value.bind="row.property.value"
-                     keydown.trigger="$event.key === 'Enter' ? saveProperty(row.property, $event.target.value) : ($event.key === 'Escape' ? cancelPropertyEdit(row.property) : null)"
-                     blur.trigger="saveProperty(row.property, $event.target.value)">
-              <button class="copy-btn ${isPropertyCopied(row.property) ? 'copied' : ''}"
-                      click.trigger="copyPropertyValue(row.property, $event)"
-                      title="Copy value">
-                ${isPropertyCopied(row.property) ? '&#10003;' : '&#128203;'}
-              </button>
-            </div>
-          </div>
-        </div>
+        </section>
 
-        <!-- Repeat Context -->
-        <div if.bind="hasOverrideContext" class="section">
-          <div class="section-header" click.trigger="toggleSection('context')">
-            <span class="expand-icon">${expandedSections.context ? '&#9660;' : '&#9654;'}</span>
-            <span class="section-title">Repeat Context</span>
+        <section if.bind="hasOverrideContext" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.context}" click.trigger="toggleSection('context')">
+            <span class="disclosure ${expandedSections.context ? 'open' : ''}"></span>
+            <span class="section-title">Repeat context</span>
             <span class="section-count">${selectedElement.overrideContext.length}</span>
+          </button>
+          <div if.bind="expandedSections.context" class="section-body">
+            <property-list properties.bind="selectedElement.overrideContext" owner.bind="selectedElement"></property-list>
           </div>
-          <div if.bind="expandedSections.context" class="section-content">
-            <div repeat.for="row of getPropertyRows(selectedElement.overrideContext, propertyRowsRevision)"
-                 class="property-row"
-                 style="padding-left: ${8 + row.depth * 12}px">
-              <button if.bind="row.property.canExpand"
-                      class="expand-btn"
-                      click.trigger="togglePropertyExpansion(row.property)">
-                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
-              </button>
-              <span class="property-name">${row.property.name}</span>
-              <span class="property-colon">:</span>
-              <span class="property-value ${getPropertyTypeClass(row.property.type)}">
-                ${formatPropertyValue(row.property.value)}
-              </span>
-              <button class="copy-btn ${isPropertyCopied(row.property) ? 'copied' : ''}"
-                      click.trigger="copyPropertyValue(row.property, $event)"
-                      title="Copy value">
-                ${isPropertyCopied(row.property) ? '&#10003;' : '&#128203;'}
-              </button>
-            </div>
-          </div>
-        </div>
+        </section>
 
-        <!-- Controller -->
-        <div if.bind="hasController" class="section">
-          <div class="section-header" click.trigger="toggleSection('controller')">
-            <span class="expand-icon">${expandedSections.controller ? '&#9660;' : '&#9654;'}</span>
+        <section if.bind="hasController" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.controller}" click.trigger="toggleSection('controller')">
+            <span class="disclosure ${expandedSections.controller ? 'open' : ''}"></span>
             <span class="section-title">Controller</span>
             <span class="section-count">${selectedElement.controller.properties.length}</span>
+          </button>
+          <div if.bind="expandedSections.controller" class="section-body">
+            <property-list properties.bind="selectedElement.controller.properties" copyable.bind="false"></property-list>
           </div>
-          <div if.bind="expandedSections.controller" class="section-content">
-            <div repeat.for="row of getPropertyRows(selectedElement.controller.properties, propertyRowsRevision)"
-                 class="property-row"
-                 style="padding-left: ${8 + row.depth * 12}px">
-              <button if.bind="row.property.canExpand"
-                      class="expand-btn"
-                      click.trigger="togglePropertyExpansion(row.property)">
-                ${row.property.isExpanded ? '&#9660;' : '&#9654;'}
-              </button>
-              <span class="property-name">${row.property.name}</span>
-              <span class="property-colon">:</span>
-              <span class="property-value ${getPropertyTypeClass(row.property.type)}">
-                ${formatPropertyValue(row.property.value)}
-              </span>
-            </div>
-          </div>
-        </div>
+        </section>
 
-        <!-- Custom Attributes -->
-        <div if.bind="hasCustomAttributes" class="section">
-          <div class="section-header" click.trigger="toggleSection('attributes')">
-            <span class="expand-icon">${expandedSections.attributes ? '&#9660;' : '&#9654;'}</span>
-            <span class="section-title">Custom Attributes</span>
+        <section if.bind="hasCustomAttributes" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.attributes}" click.trigger="toggleSection('attributes')">
+            <span class="disclosure ${expandedSections.attributes ? 'open' : ''}"></span>
+            <span class="section-title">Custom attributes</span>
             <span class="section-count">${selectedElementAttributes.length}</span>
-          </div>
-          <div if.bind="expandedSections.attributes" class="section-content">
-            <div repeat.for="attr of selectedElementAttributes" class="attribute-item">
-              <div class="attribute-name">@${attr.name}</div>
-              <div repeat.for="row of getPropertyRows(attr.bindables, propertyRowsRevision)"
-                   class="property-row sub"
-                   style="padding-left: ${12 + row.depth * 12}px">
-                <span class="property-name">${row.property.name}</span>
-                <span class="property-colon">:</span>
-                <span class="property-value ${getPropertyTypeClass(row.property.type)}">
-                  ${formatPropertyValue(row.property.value)}
-                </span>
-              </div>
+          </button>
+          <div if.bind="expandedSections.attributes" class="section-body">
+            <div repeat.for="attr of selectedElementAttributes" class="attribute-group">
+              <div class="attribute-name">${attr.name}</div>
+              <property-list properties.bind="attr.bindables" owner.bind="attr"></property-list>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Lifecycle Hooks -->
-        <div if.bind="hasLifecycleHooks" class="section">
-          <div class="section-header" click.trigger="toggleSection('lifecycle')">
-            <span class="expand-icon">${expandedSections.lifecycle ? '&#9660;' : '&#9654;'}</span>
-            <span class="section-title">Lifecycle Hooks</span>
+        <section if.bind="hasLifecycleHooks" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.lifecycle}" click.trigger="toggleSection('lifecycle')">
+            <span class="disclosure ${expandedSections.lifecycle ? 'open' : ''}"></span>
+            <span class="section-title">Lifecycle hooks</span>
             <span class="section-count">${implementedHooksCount}/${totalHooksCount}</span>
-          </div>
-          <div if.bind="expandedSections.lifecycle" class="section-content">
-            <div repeat.for="hook of lifecycleHooks.hooks" class="hook-row">
-              <span class="hook-indicator ${hook.implemented ? 'implemented' : 'not-implemented'}">
-                ${hook.implemented ? '&#10003;' : '&#10007;'}
-              </span>
+          </button>
+          <div if.bind="expandedSections.lifecycle" class="section-body">
+            <div repeat.for="hook of lifecycleHooks.hooks" class="hook-row ${hook.implemented ? 'on' : 'off'}">
+              <span class="hook-mark" aria-hidden="true"></span>
               <span class="hook-name">${hook.name}</span>
               <span if.bind="hook.isAsync" class="hook-async">async</span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Computed Properties -->
-        <div if.bind="hasComputedProperties" class="section">
-          <div class="section-header" click.trigger="toggleSection('computed')">
-            <span class="expand-icon">${expandedSections.computed ? '&#9660;' : '&#9654;'}</span>
+        <section if.bind="hasComputedProperties" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.computed}" click.trigger="toggleSection('computed')">
+            <span class="disclosure ${expandedSections.computed ? 'open' : ''}"></span>
             <span class="section-title">Computed</span>
             <span class="section-count">${computedProperties.length}</span>
-          </div>
-          <div if.bind="expandedSections.computed" class="section-content">
-            <div repeat.for="computed of computedProperties" class="property-row">
+          </button>
+          <div if.bind="expandedSections.computed" class="section-body">
+            <div repeat.for="computed of computedProperties" class="computed-row">
               <span class="property-name">${computed.name}</span>
-              <span class="computed-type">${computed.hasGetter ? 'get' : ''}${computed.hasSetter ? '/set' : ''}</span>
+              <span class="computed-kind">${computed.hasGetter ? 'get' : ''}${computed.hasSetter ? ' set' : ''}</span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Enhanced DI (Aurelia 2) -->
-        <div if.bind="isEnhancedDI" class="section">
-          <div class="section-header" click.trigger="toggleSection('dependencies')">
-            <span class="expand-icon">${expandedSections.dependencies ? '&#9660;' : '&#9654;'}</span>
-            <span class="section-title">Dependency Injection</span>
-            <span class="section-badge v2">v2</span>
-          </div>
-          <div if.bind="expandedSections.dependencies" class="section-content">
-            <!-- Injected Dependencies -->
-            <div if.bind="hasEnhancedDependencies" class="di-subsection">
-              <div class="subsection-title">Injected (${enhancedDI.dependencies.length})</div>
-              <div repeat.for="dep of enhancedDI.dependencies" class="dependency-row-enhanced">
+        <section if.bind="isEnhancedDI" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.dependencies}" click.trigger="toggleSection('dependencies')">
+            <span class="disclosure ${expandedSections.dependencies ? 'open' : ''}"></span>
+            <span class="section-title">Dependency injection</span>
+            <span if.bind="hasEnhancedDependencies" class="section-count">${enhancedDI.dependencies.length}</span>
+          </button>
+          <div if.bind="expandedSections.dependencies" class="section-body">
+            <div if.bind="hasEnhancedDependencies" class="group">
+              <div class="group-title">Injected</div>
+              <div repeat.for="dep of enhancedDI.dependencies" class="dep-row">
                 <div class="dep-main">
-                  <span class="dep-icon">${dep.type === 'interface' ? '&#9671;' : '&#9632;'}</span>
-                  <span class="dep-instance-name" if.bind="dep.instanceName">${dep.instanceName}</span>
-                  <span class="dep-key-name" if.bind="!dep.instanceName">${dep.name}</span>
+                  <span class="dep-glyph ${dep.type}" aria-hidden="true"></span>
+                  <span if.bind="dep.instanceName" class="dep-name">${dep.instanceName}</span>
+                  <span else class="dep-key">${dep.name}</span>
                 </div>
-                <div class="dep-preview" if.bind="dep.instancePreview">
-                  <span repeat.for="[key, val] of Object.entries(dep.instancePreview)" class="preview-prop">
-                    <span class="preview-key">${key}:</span>
-                    <span class="preview-val">${val}</span>
+                <div if.bind="dep.instancePreview" class="dep-preview">
+                  <span repeat.for="pair of previewRows(dep.instancePreview)" class="preview-pair">
+                    <span class="preview-key">${pair.key}:</span>
+                    <span class="preview-val">${pair.value}</span>
                   </span>
                 </div>
               </div>
             </div>
-            <!-- Container Hierarchy -->
-            <div if.bind="hasContainerHierarchy" class="di-subsection">
-              <div class="subsection-title">Container Hierarchy</div>
+
+            <div if.bind="hasContainerHierarchy" class="group">
+              <div class="group-title">Container hierarchy</div>
               <div class="container-tree">
-                <div repeat.for="ancestor of containerAncestorsReversed" class="container-node" css="padding-left: ${$index * 12}px">
-                  <span class="container-marker">${ancestor.isRoot ? '&#9679;' : '&#9675;'}</span>
-                  <span class="container-owner" if.bind="ancestor.ownerName">${ancestor.ownerName}</span>
-                  <span class="container-id" if.bind="!ancestor.ownerName">#${ancestor.id}</span>
+                <div repeat.for="ancestor of containerAncestorsReversed" class="container-node" style="padding-left: ${$index * 12}px">
+                  <span class="container-marker ${ancestor.isRoot ? 'root' : ''}" aria-hidden="true"></span>
+                  <span if.bind="ancestor.ownerName" class="container-owner">${ancestor.ownerName}</span>
+                  <span else class="container-id">#${ancestor.id}</span>
                 </div>
-                <div class="container-node current" css="padding-left: ${containerAncestorsReversed.length * 12}px">
-                  <span class="container-marker current">&#9658;</span>
-                  <span class="container-owner current">${enhancedDI.containerHierarchy.current.ownerName || 'current'}</span>
+                <div class="container-node current" style="padding-left: ${containerAncestorsReversed.length * 12}px">
+                  <span class="container-marker current" aria-hidden="true"></span>
+                  <span class="container-owner">${currentContainerLabel}</span>
                 </div>
               </div>
             </div>
-            <!-- Available Services -->
-            <div if.bind="availableServicesCount > 0" class="di-subsection">
-              <div class="subsection-title clickable" click.trigger="toggleAvailableServices()">
-                <span class="expand-icon">${showAvailableServices ? '&#9660;' : '&#9654;'}</span>
-                Available Services (${availableServicesCount})
-              </div>
+
+            <div if.bind="availableServicesCount > 0" class="group">
+              <button type="button" class="group-title group-toggle" aria-expanded="${showAvailableServices}" click.trigger="toggleAvailableServices()">
+                <span class="disclosure ${showAvailableServices ? 'open' : ''}"></span>
+                Available services
+                <span class="section-count">${availableServicesCount}</span>
+              </button>
               <div if.bind="showAvailableServices" class="services-list">
                 <div repeat.for="svc of enhancedDI.availableServices" class="service-row">
-                  <span class="svc-icon">${svc.type === 'interface' ? '&#9671;' : '&#9632;'}</span>
-                  <span class="svc-name">${svc.name}</span>
-                  <span if.bind="svc.isFromAncestor" class="inherited-badge">inh</span>
+                  <span class="dep-glyph ${svc.type}" aria-hidden="true"></span>
+                  <span class="service-name">${svc.name}</span>
+                  <span if.bind="svc.isFromAncestor" class="inherited" title="Registered on an ancestor container">inherited</span>
                 </div>
               </div>
             </div>
-            <!-- Empty state -->
-            <div if.bind="!hasEnhancedDependencies && !hasContainerHierarchy && availableServicesCount === 0" class="empty-state">
-              No DI info available
-            </div>
-          </div>
-        </div>
 
-        <!-- Basic Dependencies (Aurelia 1) -->
-        <div if.bind="!isEnhancedDI && hasDependencies" class="section">
-          <div class="section-header" click.trigger="toggleSection('dependencies')">
-            <span class="expand-icon">${expandedSections.dependencies ? '&#9660;' : '&#9654;'}</span>
+            <div if.bind="!hasAnyDIInfo" class="empty small">No dependency information available.</div>
+          </div>
+        </section>
+
+        <section if.bind="!isEnhancedDI && hasDependencies" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.dependencies}" click.trigger="toggleSection('dependencies')">
+            <span class="disclosure ${expandedSections.dependencies ? 'open' : ''}"></span>
             <span class="section-title">Dependencies</span>
             <span class="section-count">${dependencies.dependencies.length}</span>
-          </div>
-          <div if.bind="expandedSections.dependencies" class="section-content">
-            <div repeat.for="dep of dependencies.dependencies" class="dependency-row">
-              <span class="dep-icon">${dep.type === 'interface' ? '&#9671;' : '&#9632;'}</span>
+          </button>
+          <div if.bind="expandedSections.dependencies" class="section-body">
+            <div repeat.for="dep of dependencies.dependencies" class="dep-row simple">
+              <span class="dep-glyph ${dep.type}" aria-hidden="true"></span>
               <span class="dep-name">${dep.name}</span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Route Info -->
-        <div if.bind="hasRouteInfo" class="section">
-          <div class="section-header" click.trigger="toggleSection('route')">
-            <span class="expand-icon">${expandedSections.route ? '&#9660;' : '&#9654;'}</span>
+        <section if.bind="hasRouteInfo" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.route}" click.trigger="toggleSection('route')">
+            <span class="disclosure ${expandedSections.route ? 'open' : ''}"></span>
             <span class="section-title">Route</span>
-          </div>
-          <div if.bind="expandedSections.route" class="section-content">
-            <div class="route-info">
-              <div class="route-path">${routeInfo.currentRoute}</div>
-              <div if.bind="routeInfo.params.length" class="route-params">
-                <span repeat.for="param of routeInfo.params" class="param">${param.name}: ${param.value}</span>
-              </div>
+          </button>
+          <div if.bind="expandedSections.route" class="section-body route">
+            <div class="route-path">${routeInfo.currentRoute}</div>
+            <div if.bind="routeInfo.params.length" class="route-params">
+              <span repeat.for="param of routeInfo.params" class="route-param">
+                <span class="property-name">${param.name}</span><span class="property-colon">:</span> <span class="type-string">${param.value}</span>
+              </span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Slots -->
-        <div if.bind="hasSlots" class="section">
-          <div class="section-header" click.trigger="toggleSection('slots')">
-            <span class="expand-icon">${expandedSections.slots ? '&#9660;' : '&#9654;'}</span>
+        <section if.bind="hasSlots" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.slots}" click.trigger="toggleSection('slots')">
+            <span class="disclosure ${expandedSections.slots ? 'open' : ''}"></span>
             <span class="section-title">Slots</span>
             <span class="section-count">${activeSlotCount}/${slotInfo.slots.length}</span>
-          </div>
-          <div if.bind="expandedSections.slots" class="section-content">
-            <div repeat.for="slot of slotInfo.slots" class="slot-row">
-              <span class="slot-indicator ${slot.hasContent ? 'filled' : 'empty'}">
-                ${slot.hasContent ? '&#9632;' : '&#9633;'}
-              </span>
+          </button>
+          <div if.bind="expandedSections.slots" class="section-body">
+            <div repeat.for="slot of slotInfo.slots" class="slot-row ${slot.hasContent ? 'filled' : 'empty-slot'}">
+              <span class="slot-mark" aria-hidden="true"></span>
               <span class="slot-name">${slot.name || 'default'}</span>
+              <span class="slot-state">${slot.hasContent ? 'projected' : 'empty'}</span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Template Debugger -->
-        <div if.bind="hasTemplateInfo" class="section">
-          <div class="section-header" click.trigger="toggleSection('template')">
-            <span class="expand-icon">${expandedSections.template ? '&#9660;' : '&#9654;'}</span>
+        <section if.bind="hasTemplateInfo" class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.template}" click.trigger="toggleSection('template')">
+            <span class="disclosure ${expandedSections.template ? 'open' : ''}"></span>
             <span class="section-title">Template</span>
             <span class="section-count">${templateBindingsCount + templateControllersCount}</span>
-          </div>
-          <div if.bind="expandedSections.template" class="section-content template-panel">
-            <!-- Template Bindings -->
-            <div if.bind="templateBindingsCount > 0" class="template-subsection">
-              <div class="subsection-title">
-                <span class="subsection-icon">&#8644;</span>
-                Bindings (${templateBindingsCount})
+          </button>
+          <div if.bind="expandedSections.template" class="section-body">
+            <div if.bind="templateBindingsCount > 0" class="group">
+              <div class="group-title">Bindings <span class="section-count">${templateBindingsCount}</span></div>
+              <div repeat.for="binding of templateBindings"
+                   class="binding-row ${binding.type} ${expandedBindingIds[binding.id] ? 'open' : ''}"
+                   click.trigger="toggleBindingExpand(binding)">
+                <div class="binding-head">
+                  <span class="binding-kind">${bindingTypeLabel(binding.type)}</span>
+                  <span class="binding-target">${binding.target}</span>
+                  <span class="binding-mode ${bindingModeClass(binding.mode)}" title="${binding.mode || 'default'}">${bindingModeLabel(binding.mode)}</span>
+                  <span class="binding-expr">${binding.expression}</span>
+                </div>
+                <div if.bind="expandedBindingIds[binding.id]" class="detail">
+                  <div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${binding.type}</span></div>
+                  <div class="detail-row"><span class="detail-label">Mode</span><span class="detail-value">${binding.mode || 'default'}</span></div>
+                  <div class="detail-row"><span class="detail-label">Value</span><span class="detail-value ${binding.valueType}">${formatBindingValue(binding.value)}</span></div>
+                  <div class="detail-row"><span class="detail-label">Bound</span><span class="detail-value">${binding.isBound ? 'yes' : 'no'}</span></div>
+                </div>
               </div>
-              <div class="template-bindings">
-                <div repeat.for="binding of templateBindings"
-                     class="template-binding ${binding.type}"
-                     click.trigger="toggleBindingExpand(binding)">
-                  <div class="binding-header">
-                    <span class="binding-type-icon" innerhtml.bind="getBindingTypeIcon(binding.type)"></span>
-                    <span class="binding-target">${binding.target}</span>
-                    <span class="binding-mode ${getBindingModeClass(binding.mode)}">${getBindingModeLabel(binding.mode)}</span>
-                    <span class="binding-expression">${binding.expression}</span>
+            </div>
+
+            <div if.bind="templateControllersCount > 0" class="group">
+              <div class="group-title">Template controllers <span class="section-count">${templateControllersCount}</span></div>
+              <div repeat.for="ctrl of templateControllers"
+                   class="controller-row ${ctrl.type} ${ctrl.isActive ? 'active' : 'inactive'} ${expandedControllerIds[ctrl.id] ? 'open' : ''}"
+                   click.trigger="toggleControllerExpand(ctrl)">
+                <div class="controller-head">
+                  <span class="controller-type">${ctrl.type}</span>
+                  <span if.bind="ctrl.expression" class="controller-expr">${ctrl.expression}</span>
+                  <span class="controller-state">${ctrl.isActive ? 'active' : 'inactive'}</span>
+                </div>
+                <div if.bind="expandedControllerIds[ctrl.id]" class="detail">
+                  <div if.bind="isConditionalController(ctrl)" class="detail-row">
+                    <span class="detail-label">Condition</span><span class="detail-value type-boolean">${ctrl.condition}</span>
                   </div>
-                  <div if.bind="isBindingExpanded(binding)" class="binding-details">
-                    <div class="binding-detail-row">
-                      <span class="detail-label">Type:</span>
-                      <span class="detail-value">${binding.type}</span>
-                    </div>
-                    <div class="binding-detail-row">
-                      <span class="detail-label">Mode:</span>
-                      <span class="detail-value">${binding.mode}</span>
-                    </div>
-                    <div class="binding-detail-row">
-                      <span class="detail-label">Value:</span>
-                      <span class="detail-value ${getPropertyTypeClass(binding.valueType)}">${formatBindingValue(binding.value)}</span>
-                    </div>
-                    <div class="binding-detail-row">
-                      <span class="detail-label">Bound:</span>
-                      <span class="detail-value">${binding.isBound ? 'Yes' : 'No'}</span>
+                  <div if.bind="ctrl.cachedViews" class="detail-row">
+                    <span class="detail-label">Cached views</span><span class="detail-value type-number">${ctrl.cachedViews}</span>
+                  </div>
+                  <div if.bind="ctrl.type === 'repeat'" class="detail-row">
+                    <span class="detail-label">Variable</span><span class="detail-value type-string">${ctrl.localVariable}</span>
+                  </div>
+                  <div if.bind="ctrl.type === 'repeat'" class="detail-row">
+                    <span class="detail-label">Items</span><span class="detail-value type-number">${ctrl.itemCount}</span>
+                  </div>
+                  <div if.bind="hasRepeatItems(ctrl)" class="repeat-items">
+                    <div repeat.for="item of ctrl.items" class="repeat-item">
+                      <span class="item-index">[${item.index}]</span>
+                      <span class="item-value">${item.value}</span>
+                      <span class="item-flags">
+                        <span if.bind="item.isFirst" class="item-flag">first</span>
+                        <span if.bind="item.isLast" class="item-flag">last</span>
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Template Controllers -->
-            <div if.bind="templateControllersCount > 0" class="template-subsection">
-              <div class="subsection-title">
-                <span class="subsection-icon">&#9881;</span>
-                Controllers (${templateControllersCount})
-              </div>
-              <div class="template-controllers">
-                <div repeat.for="ctrl of templateControllers"
-                     class="template-controller ${ctrl.type} ${ctrl.isActive ? 'active' : 'inactive'}"
-                     click.trigger="toggleControllerExpand(ctrl)">
-                  <div class="controller-header">
-                    <span class="controller-type-icon" innerhtml.bind="getControllerTypeIcon(ctrl.type)"></span>
-                    <span class="controller-type">${ctrl.type}</span>
-                    <span if.bind="ctrl.expression" class="controller-expression">${ctrl.expression}</span>
-                    <span class="controller-status ${ctrl.isActive ? 'active' : 'inactive'}">
-                      ${ctrl.isActive ? '&#10003;' : '&#10007;'}
-                    </span>
-                  </div>
-                  <div if.bind="isControllerExpanded(ctrl)" class="controller-details">
-                    <!-- If/Else Details -->
-                    <div if.bind="ctrl.type === 'if' || ctrl.type === 'else'" class="controller-detail-row">
-                      <span class="detail-label">Condition:</span>
-                      <span class="detail-value type-boolean">${ctrl.condition}</span>
-                    </div>
-                    <div if.bind="ctrl.cachedViews" class="controller-detail-row">
-                      <span class="detail-label">Cached Views:</span>
-                      <span class="detail-value">${ctrl.cachedViews}</span>
-                    </div>
-
-                    <!-- Repeat Details -->
-                    <div if.bind="ctrl.type === 'repeat'" class="repeat-details">
-                      <div class="controller-detail-row">
-                        <span class="detail-label">Variable:</span>
-                        <span class="detail-value type-string">${ctrl.localVariable}</span>
-                      </div>
-                      <div class="controller-detail-row">
-                        <span class="detail-label">Item Count:</span>
-                        <span class="detail-value type-number">${ctrl.itemCount}</span>
-                      </div>
-                      <div if.bind="ctrl.items && ctrl.items.length > 0" class="repeat-items">
-                        <div class="repeat-items-header">Items Preview:</div>
-                        <div repeat.for="item of ctrl.items" class="repeat-item">
-                          <span class="item-index">[${item.index}]</span>
-                          <span class="item-value">${item.value}</span>
-                          <span class="item-flags">
-                            <span if.bind="item.isFirst" class="item-flag first">first</span>
-                            <span if.bind="item.isLast" class="item-flag last">last</span>
-                            <span if.bind="item.isEven" class="item-flag even">even</span>
-                            <span if.bind="item.isOdd" class="item-flag odd">odd</span>
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Template Meta -->
-            <div if.bind="templateSnapshot.hasSlots || templateSnapshot.shadowMode !== 'none' || templateSnapshot.isContainerless" class="template-meta">
-              <span if.bind="templateSnapshot.hasSlots" class="meta-badge slots">has slots</span>
-              <span if.bind="templateSnapshot.shadowMode !== 'none'" class="meta-badge shadow">${templateSnapshot.shadowMode} shadow</span>
-              <span if.bind="templateSnapshot.isContainerless" class="meta-badge containerless">containerless</span>
+            <div if.bind="hasTemplateMeta" class="template-meta">
+              <span if.bind="templateSnapshot.hasSlots" class="meta-tag">has slots</span>
+              <span if.bind="templateSnapshot.shadowMode !== 'none'" class="meta-tag">${templateSnapshot.shadowMode} shadow DOM</span>
+              <span if.bind="templateSnapshot.isContainerless" class="meta-tag">containerless</span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Expression Evaluator -->
-        <div class="section">
-          <div class="section-header" click.trigger="toggleSection('expression')">
-            <span class="expand-icon">${expandedSections.expression ? '&#9660;' : '&#9654;'}</span>
+        <section class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.expression}" click.trigger="toggleSection('expression')">
+            <span class="disclosure ${expandedSections.expression ? 'open' : ''}"></span>
             <span class="section-title">Evaluate</span>
-          </div>
-          <div if.bind="expandedSections.expression" class="section-content expression-panel">
-            <div class="expression-input-wrapper">
-              <input
-                type="text"
-                class="expression-input"
-                placeholder="this.propertyName"
-                value.bind="expressionInput"
-                keydown.trigger="$event.key === 'Enter' ? evaluateExpression() : null">
-              <button class="eval-btn" click.trigger="evaluateExpression()">Run</button>
+          </button>
+          <div if.bind="expandedSections.expression" class="section-body evaluate">
+            <div class="evaluate-form">
+              <input type="text"
+                     class="expression-input"
+                     placeholder="this.propertyName"
+                     aria-label="Expression to evaluate in the component"
+                     autocomplete="off"
+                     spellcheck="false"
+                     value.bind="expressionInput"
+                     keydown.trigger="onExpressionKeydown($event)">
+              <button type="button" class="run-btn" disabled.bind="!canEvaluate" click.trigger="evaluateExpression()">Run</button>
             </div>
-            <div if.bind="expressionError" class="expression-error">${expressionError}</div>
+            <div if.bind="expressionError" class="expression-error" role="alert">${expressionError}</div>
             <div if.bind="expressionResult" class="expression-result">
               <span class="result-type">${expressionResultType}</span>
               <pre class="result-value">${expressionResult}</pre>
             </div>
             <div if.bind="expressionHistory.length" class="expression-history">
-              <div repeat.for="expr of expressionHistory"
-                   class="history-item"
-                   click.trigger="selectHistoryExpression(expr)">
-                ${expr}
-              </div>
+              <button repeat.for="expr of expressionHistory"
+                      type="button"
+                      class="history-item"
+                      click.trigger="selectHistoryExpression(expr)">${expr}</button>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Timeline / Interaction Recorder -->
-        <div class="section">
-          <div class="section-header" click.trigger="toggleSection('timeline')">
-            <span class="expand-icon">${expandedSections.timeline ? '&#9660;' : '&#9654;'}</span>
+        <section class="section">
+          <button type="button" class="section-header" aria-expanded="${expandedSections.timeline}" click.trigger="toggleSection('timeline')">
+            <span class="disclosure ${expandedSections.timeline ? 'open' : ''}"></span>
             <span class="section-title">Timeline</span>
             <span if.bind="hasTimelineEvents" class="section-count">${timelineEventCount}</span>
-            <span if.bind="isRecording" class="recording-indicator">&#9679;</span>
-          </div>
-          <div if.bind="expandedSections.timeline" class="section-content timeline-panel">
+            <span if.bind="isRecording" class="recording-dot" title="Recording" aria-label="Recording"></span>
+          </button>
+          <div if.bind="expandedSections.timeline" class="section-body timeline">
             <div class="timeline-controls">
-              <button if.bind="!isRecording" class="timeline-btn start" click.trigger="startRecording()">
-                <span class="btn-icon">&#9654;</span>
-                <span class="btn-text">Record</span>
-              </button>
-              <button if.bind="isRecording" class="timeline-btn stop" click.trigger="stopRecording()">
-                <span class="btn-icon">&#9632;</span>
-                <span class="btn-text">Stop</span>
-              </button>
-              <button class="timeline-btn clear" click.trigger="clearTimeline()" disabled.bind="!hasTimelineEvents && !isRecording">
-                <span class="btn-icon">&#8855;</span>
-                <span class="btn-text">Clear</span>
-              </button>
+              <button if.bind="!isRecording" type="button" class="text-btn" click.trigger="startRecording()">Record</button>
+              <button if.bind="isRecording" type="button" class="text-btn recording" click.trigger="stopRecording()">Stop</button>
+              <button type="button" class="text-btn" disabled.bind="!canClearTimeline" click.trigger="clearTimeline()">Clear</button>
             </div>
-            <div if.bind="!hasTimelineEvents && !isRecording" class="timeline-empty">
-              Click Record to start capturing interactions
-            </div>
-            <div if.bind="isRecording && !hasTimelineEvents" class="timeline-empty recording">
-              Recording... Interact with the page to capture events
-            </div>
+            <div if.bind="!hasTimelineEvents && !isRecording" class="empty small">Record to capture event handlers and navigations as they happen.</div>
+            <div if.bind="isRecording && !hasTimelineEvents" class="empty small">Recording. Interact with the page to capture events.</div>
             <div if.bind="hasTimelineEvents" class="timeline-events">
               <div repeat.for="event of timelineEvents"
-                   class="timeline-event ${getTimelineEventTypeClass(event.eventName)}"
+                   class="timeline-event ${timelineEventClass(event)} ${expandedTimelineIds[event.id] ? 'open' : ''}"
                    click.trigger="toggleTimelineEvent(event)">
-                <div class="event-header">
+                <div class="event-head">
                   <span class="event-time">${formatTimelineTimestamp(event.timestamp)}</span>
-                  <span class="event-type">${event.eventName}</span>
-                  <span if.bind="event.vmName" class="event-component" click.trigger="selectTimelineComponent(event)">${event.vmName}</span>
+                  <span class="event-name">${event.eventName}</span>
+                  <button if.bind="event.vmName"
+                          type="button"
+                          class="event-component"
+                          title="Select this component"
+                          click.trigger="selectTimelineComponent(event, $event)">${event.vmName}</button>
                   <span if.bind="event.handlerName" class="event-handler">${event.handlerName}</span>
-                  <span if.bind="event.duration" class="event-duration">${event.duration}ms</span>
+                  <span if.bind="event.duration" class="event-duration">${event.duration} ms</span>
                 </div>
-                <div if.bind="isTimelineEventExpanded(event)" class="event-details">
-                  <div if.bind="event.before" class="event-snapshot">
-                    <span class="snapshot-label">Before:</span>
-                    <div class="snapshot-data">
-                      <span repeat.for="[key, val] of Object.entries(event.before)" class="snapshot-prop">
-                        ${key}: ${val}
-                      </span>
+                <div if.bind="expandedTimelineIds[event.id]" class="detail">
+                  <div if.bind="event.before" class="snapshot">
+                    <span class="detail-label">Before</span>
+                    <div class="snapshot-rows">
+                      <span repeat.for="row of snapshotRows(event.before)" class="snapshot-row">${row.key}: ${row.value}</span>
                     </div>
                   </div>
-                  <div if.bind="event.after" class="event-snapshot">
-                    <span class="snapshot-label">After:</span>
-                    <div class="snapshot-data">
-                      <span repeat.for="[key, val] of Object.entries(event.after)" class="snapshot-prop">
-                        ${key}: ${val}
-                      </span>
+                  <div if.bind="event.after" class="snapshot">
+                    <span class="detail-label">After</span>
+                    <div class="snapshot-rows">
+                      <span repeat.for="row of snapshotRows(event.after)" class="snapshot-row">${row.key}: ${row.value}</span>
                     </div>
                   </div>
-                  <div if.bind="event.error" class="event-error">
-                    Error: ${event.error}
-                  </div>
+                  <div if.bind="event.error" class="event-error">${event.error}</div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   </div>

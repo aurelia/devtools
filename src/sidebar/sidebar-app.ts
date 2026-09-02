@@ -1,17 +1,17 @@
-import { ICustomElementViewModel, IPlatform } from 'aurelia';
-import { resolve } from '@aurelia/kernel';
-import { SidebarDebugHost } from './sidebar-debug-host';
+import { ICustomElementViewModel, resolve } from 'aurelia';
+import { SidebarDebugHost, SearchResult } from './sidebar-debug-host';
+import { formatExpandedValue, formatTimestamp, serializeProperties } from './format';
 import {
   AureliaInfo,
   ComponentTreeNode,
   ComponentTreeRow,
   ComputedPropertyInfo,
+  ContainerInfo,
   DISnapshot,
   EnhancedDISnapshot,
   EventInteractionRecord,
   IControllerInfo,
   LifecycleHooksSnapshot,
-  Property,
   PropertyChangeRecord,
   PropertySnapshot,
   RouteSnapshot,
@@ -21,265 +21,289 @@ import {
   TemplateSnapshot,
 } from '../shared/types';
 
-export class SidebarApp implements ICustomElementViewModel {
-  isDarkTheme = false;
+export type DetectionState = 'checking' | 'detected' | 'not-found' | 'disabled';
+export type SelectedNodeType = 'custom-element' | 'custom-attribute';
+export type SectionId =
+  | 'bindables'
+  | 'properties'
+  | 'context'
+  | 'controller'
+  | 'attributes'
+  | 'lifecycle'
+  | 'computed'
+  | 'dependencies'
+  | 'route'
+  | 'slots'
+  | 'template'
+  | 'expression'
+  | 'timeline';
 
-  // Detection state
-  aureliaDetected = false;
+export interface PickedElementInfo extends AureliaInfo {
+  __selectedElement?: string | null;
+  __isBindingContext?: boolean;
+}
+
+export interface SnapshotRow {
+  key: string;
+  value: string;
+}
+
+const FOLLOW_SELECTION_KEY = 'au-devtools.followChromeSelection';
+const SECTIONS_KEY = 'au-devtools.sections';
+const DETECTION_POLL_MS = 2000;
+const PROPERTY_POLL_MS = 500;
+const COPIED_FEEDBACK_MS = 1500;
+const EXPRESSION_HISTORY_LIMIT = 10;
+const TIMELINE_LIMIT = 200;
+
+const DEFAULT_SECTIONS: Record<SectionId, boolean> = {
+  bindables: true,
+  properties: true,
+  context: true,
+  controller: false,
+  attributes: true,
+  lifecycle: false,
+  computed: false,
+  dependencies: false,
+  route: false,
+  slots: false,
+  template: false,
+  expression: false,
+  timeline: false,
+};
+
+const BINDING_TYPE_LABELS: Record<string, string> = {
+  property: 'prop',
+  attribute: 'attr',
+  interpolation: '${}',
+  listener: 'event',
+  ref: 'ref',
+  let: 'let',
+};
+
+const BINDING_MODE_LABELS: Record<string, string> = {
+  oneTime: 'one-time',
+  toView: '→',
+  fromView: '←',
+  twoWay: '↔',
+  default: '→',
+};
+
+const BINDING_MODE_CLASSES: Record<string, string> = {
+  oneTime: 'mode-one-time',
+  toView: 'mode-to-view',
+  fromView: 'mode-from-view',
+  twoWay: 'mode-two-way',
+  default: 'mode-default',
+};
+
+export class SidebarApp implements ICustomElementViewModel {
+  detectionState: DetectionState = 'checking';
   aureliaVersion: number | null = null;
-  detectionState: 'checking' | 'detected' | 'not-found' | 'disabled' = 'checking';
   extensionInvalidated = false;
 
-  // Selected component
   selectedElement: IControllerInfo | null = null;
   selectedElementAttributes: IControllerInfo[] = [];
-  selectedNodeType: 'custom-element' | 'custom-attribute' = 'custom-element';
+  selectedNodeType: SelectedNodeType = 'custom-element';
   selectedElementTagName: string | null = null;
   isShowingBindingContext = false;
 
-  // Element picker
   isElementPickerActive = false;
   followChromeSelection = true;
 
-  // Component tree
   componentTree: ComponentTreeNode[] = [];
-  expandedTreeNodes: Set<string> = new Set();
+  expandedTreeKeys: Record<string, boolean> = {};
   selectedTreeNodeKey: string | null = null;
   isTreePanelExpanded = true;
-  treeRevision = 0;
 
-  // Timeline / Interaction recorder
   isRecording = false;
   timelineEvents: EventInteractionRecord[] = [];
-  expandedTimelineEvents: Set<string> = new Set();
-  private interactionListener: ((msg: any) => void) | null = null;
+  expandedTimelineIds: Record<string, boolean> = {};
 
-  // Search
   searchQuery = '';
   searchResults: SearchResult[] = [];
   isSearchOpen = false;
+  activeSearchIndex = -1;
 
-  // Collapsible sections state - use object for Aurelia reactivity
-  expandedSections: Record<string, boolean> = {
-    bindables: true,
-    properties: true,
-    context: true,
-    controller: false,
-    attributes: false,
-    lifecycle: false,
-    computed: false,
-    dependencies: false,
-    route: false,
-    slots: false,
-    expression: false,
-    timeline: false,
-    template: false,
-  };
+  expandedSections: Record<SectionId, boolean> = { ...DEFAULT_SECTIONS };
 
-  // Enhanced inspection
   lifecycleHooks: LifecycleHooksSnapshot | null = null;
   computedProperties: ComputedPropertyInfo[] = [];
   dependencies: DISnapshot | null = null;
-  routeInfo: RouteSnapshot | null = null;
-  slotInfo: SlotSnapshot | null = null;
-
-  // Template debugger
-  templateSnapshot: TemplateSnapshot | null = null;
-  expandedBindings: Set<string> = new Set();
-  expandedControllers: Set<string> = new Set();
-
-  // Enhanced DI inspection (Aurelia 2 only)
   enhancedDI: EnhancedDISnapshot | null = null;
   showAvailableServices = false;
+  routeInfo: RouteSnapshot | null = null;
+  slotInfo: SlotSnapshot | null = null;
+  templateSnapshot: TemplateSnapshot | null = null;
+  expandedBindingIds: Record<string, boolean> = {};
+  expandedControllerIds: Record<string, boolean> = {};
 
-  // Expression evaluation
   expressionInput = '';
   expressionResult = '';
   expressionResultType = '';
   expressionError = '';
   expressionHistory: string[] = [];
 
-  // Property editing
-  copiedPropertyId: string | null = null;
-  propertyRowsRevision = 0;
+  isExportCopied = false;
 
-  // Property change listener
-  private propertyChangeListener: ((msg: any, sender: any) => void) | null = null;
+  private readonly debugHost: SidebarDebugHost = resolve(SidebarDebugHost);
+  private detectionTimer: ReturnType<typeof setInterval> | null = null;
+  private exportCopiedTimer: ReturnType<typeof setTimeout> | null = null;
+  private unsubscribers: Array<() => void> = [];
+  private searchSequence = 0;
 
-  private debugHost: SidebarDebugHost = resolve(SidebarDebugHost);
-  private plat: IPlatform = resolve(IPlatform);
+  attaching(): void {
+    this.applyTheme();
+    this.restorePreferences();
 
-  attaching() {
+    this.unsubscribers.push(
+      this.debugHost.onRuntimeMessage('au-devtools:property-change', (message) =>
+        this.onPropertyChanges(message.changes, message.snapshot)
+      ),
+      this.debugHost.onRuntimeMessage('au-devtools:interaction', (message) => this.onInteraction(message.entry)),
+      this.debugHost.onRuntimeMessage('au-devtools:tree-change', () => this.loadComponentTree())
+    );
+
     this.debugHost.attach(this);
-    this.isDarkTheme = (chrome?.devtools?.panels as any)?.themeName === 'dark';
-
-    if (this.isDarkTheme) {
-      document.documentElement.classList.add('dark');
-    }
-
-    // Restore preferences
-    try {
-      const persisted = localStorage.getItem('au-devtools.followChromeSelection');
-      if (persisted != null) this.followChromeSelection = persisted === 'true';
-    } catch {}
-
-    // Register property change listener
-    this.registerPropertyChangeStream();
-
-    // Register interaction listener for timeline
-    this.registerInteractionStream();
-
-    // Check detection state
-    this.checkDetectionState();
-
-    // Start detection polling
-    this.startDetectionPolling();
-
-    // Load component tree
+    this.refreshDetectionState();
+    this.detectionTimer = setInterval(() => this.pollDetection(), DETECTION_POLL_MS);
     this.loadComponentTree();
   }
 
-  detaching() {
-    if (this.propertyChangeListener && chrome?.runtime?.onMessage?.removeListener) {
-      chrome.runtime.onMessage.removeListener(this.propertyChangeListener);
+  detaching(): void {
+    if (this.detectionTimer) {
+      clearInterval(this.detectionTimer);
+      this.detectionTimer = null;
     }
-    if (this.interactionListener && chrome?.runtime?.onMessage?.removeListener) {
-      chrome.runtime.onMessage.removeListener(this.interactionListener);
+    if (this.exportCopiedTimer) {
+      clearTimeout(this.exportCopiedTimer);
+      this.exportCopiedTimer = null;
     }
+    for (const unsubscribe of this.unsubscribers) unsubscribe();
+    this.unsubscribers = [];
+    this.debugHost.detach();
   }
 
-  private registerPropertyChangeStream() {
-    if (!(chrome?.runtime?.onMessage?.addListener)) return;
-    this.propertyChangeListener = (message: any) => {
-      if (message?.type === 'au-devtools:property-change') {
-        this.onPropertyChanges(message.changes, message.snapshot);
-      }
-    };
-    chrome.runtime.onMessage.addListener(this.propertyChangeListener);
+  private applyTheme(): void {
+    const theme = this.debugHost.getThemeName();
+    const root = document.documentElement;
+    root.classList.toggle('dark', theme === 'dark');
+    root.classList.toggle('light', theme !== null && theme !== 'dark');
   }
 
-  private registerInteractionStream() {
-    if (!(chrome?.runtime?.onMessage?.addListener)) return;
-    this.interactionListener = (message: any) => {
-      if (message?.type === 'au-devtools:interaction' && this.isRecording) {
-        this.timelineEvents = [...this.timelineEvents, message.entry];
-      }
-    };
-    chrome.runtime.onMessage.addListener(this.interactionListener);
-  }
+  private restorePreferences(): void {
+    try {
+      const follow = localStorage.getItem(FOLLOW_SELECTION_KEY);
+      if (follow != null) this.followChromeSelection = follow === 'true';
 
-  onPropertyChanges(changes: PropertyChangeRecord[], snapshot: PropertySnapshot) {
-    if (!changes?.length || !this.selectedElement) return;
-
-    const selectedKey = this.selectedComponentKey;
-    if (!selectedKey || snapshot?.componentKey !== selectedKey) return;
-
-    let hasUpdates = false;
-
-    for (const change of changes) {
-      const bindable = this.selectedElement.bindables?.find(b => b.name === change.propertyName);
-      if (bindable) {
-        bindable.value = change.newValue;
-        hasUpdates = true;
-        continue;
-      }
-
-      const property = this.selectedElement.properties?.find(p => p.name === change.propertyName);
-      if (property) {
-        property.value = change.newValue;
-        hasUpdates = true;
-      }
-    }
-
-    if (hasUpdates) {
-      this.markPropertyRowsDirty();
-    }
-  }
-
-  checkDetectionState() {
-    if (chrome?.devtools) {
-      chrome.devtools.inspectedWindow.eval(
-        `({
-          state: window.__AURELIA_DEVTOOLS_DETECTION_STATE__,
-          version: window.__AURELIA_DEVTOOLS_VERSION__
-        })`,
-        (result: { state: string; version: number }, isException?: any) => {
-          if (!isException && result) {
-            switch (result.state) {
-              case 'detected':
-                this.aureliaDetected = true;
-                this.aureliaVersion = result.version;
-                this.detectionState = 'detected';
-                break;
-              case 'disabled':
-                this.aureliaDetected = false;
-                this.aureliaVersion = null;
-                this.detectionState = 'disabled';
-                break;
-              case 'not-found':
-                this.aureliaDetected = false;
-                this.aureliaVersion = null;
-                this.detectionState = 'not-found';
-                break;
-              default:
-                this.detectionState = 'checking';
-                break;
-            }
-          }
+      const sections = localStorage.getItem(SECTIONS_KEY);
+      if (sections) {
+        const parsed = JSON.parse(sections) as Partial<Record<SectionId, boolean>>;
+        for (const id of Object.keys(DEFAULT_SECTIONS) as SectionId[]) {
+          if (typeof parsed[id] === 'boolean') this.expandedSections[id] = parsed[id] as boolean;
         }
-      );
+      }
+    } catch {
+      /* preferences are optional */
     }
   }
 
-  startDetectionPolling() {
-    setInterval(() => {
-      if (this.checkExtensionInvalidated()) return;
-      this.checkDetectionState();
-    }, 2000);
+  private persist(key: string, value: string): void {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      /* preferences are optional */
+    }
+  }
+
+  // Detection
+
+  get isChecking(): boolean {
+    return !this.extensionInvalidated && this.detectionState === 'checking';
+  }
+
+  get isNotFound(): boolean {
+    return !this.extensionInvalidated && this.detectionState === 'not-found';
+  }
+
+  get isDisabled(): boolean {
+    return !this.extensionInvalidated && this.detectionState === 'disabled';
+  }
+
+  get isDetected(): boolean {
+    return !this.extensionInvalidated && this.detectionState === 'detected';
+  }
+
+  get versionLabel(): string {
+    return this.aureliaVersion ? `Aurelia ${this.aureliaVersion}` : 'Aurelia';
+  }
+
+  async refreshDetectionState(): Promise<void> {
+    const snapshot = await this.debugHost.getDetectionState();
+    if (!snapshot) return;
+
+    const previous = this.detectionState;
+    switch (snapshot.state) {
+      case 'detected':
+        this.aureliaVersion = snapshot.version;
+        this.detectionState = 'detected';
+        break;
+      case 'disabled':
+        this.aureliaVersion = null;
+        this.detectionState = 'disabled';
+        break;
+      case 'not-found':
+        this.aureliaVersion = null;
+        this.detectionState = 'not-found';
+        break;
+      default:
+        this.detectionState = 'checking';
+    }
+
+    if (previous !== 'detected' && this.detectionState === 'detected') {
+      this.loadComponentTree();
+      if (this.followChromeSelection) this.debugHost.refreshSelection();
+    }
+  }
+
+  private pollDetection(): void {
+    if (this.checkExtensionInvalidated()) {
+      if (this.detectionTimer) clearInterval(this.detectionTimer);
+      this.detectionTimer = null;
+      return;
+    }
+    this.refreshDetectionState();
   }
 
   checkExtensionInvalidated(): boolean {
-    try {
-      if (!chrome?.runtime?.id) {
-        this.extensionInvalidated = true;
-        return true;
-      }
-    } catch {
-      this.extensionInvalidated = true;
-      return true;
-    }
-    return false;
+    if (this.debugHost.isRuntimeAvailable()) return false;
+    this.extensionInvalidated = true;
+    return true;
   }
 
-  // Called by debug host when element is selected in Elements panel
-  onElementPicked(componentInfo: AureliaInfo) {
+  // Selection
+
+  onElementPicked(info: PickedElementInfo | null): void {
     this.isElementPickerActive = false;
     this.debugHost.stopElementPicker();
 
-    if (!componentInfo) {
+    if (!info) {
       this.clearSelection();
       return;
     }
 
-    const elementInfo = componentInfo.customElementInfo;
-    const attributesInfo = componentInfo.customAttributesInfo || [];
+    const element = info.customElementInfo;
+    const attributes = info.customAttributesInfo ?? [];
 
-    // Track the actual selected element and whether we're showing inherited binding context
-    this.selectedElementTagName = (componentInfo as any).__selectedElement || null;
-    this.isShowingBindingContext = !!(componentInfo as any).__isBindingContext;
+    this.selectedElementTagName = info.__selectedElement ?? null;
+    this.isShowingBindingContext = info.__isBindingContext === true;
 
-    if (elementInfo) {
-      this.selectedElement = elementInfo;
-      this.selectedElement.bindables = this.selectedElement.bindables || [];
-      this.selectedElement.properties = this.selectedElement.properties || [];
-      this.selectedElement.overrideContext = this.selectedElement.overrideContext || [];
-      this.selectedElementAttributes = attributesInfo;
+    if (element) {
+      this.selectedElement = normalizeControllerInfo(element);
+      this.selectedElementAttributes = attributes;
       this.selectedNodeType = 'custom-element';
-    } else if (attributesInfo.length > 0) {
-      this.selectedElement = attributesInfo[0];
-      this.selectedElement.bindables = this.selectedElement.bindables || [];
-      this.selectedElement.properties = this.selectedElement.properties || [];
-      this.selectedElement.overrideContext = this.selectedElement.overrideContext || [];
+    } else if (attributes.length > 0) {
+      this.selectedElement = normalizeControllerInfo(attributes[0]);
       this.selectedElementAttributes = [];
       this.selectedNodeType = 'custom-attribute';
     } else {
@@ -287,19 +311,15 @@ export class SidebarApp implements ICustomElementViewModel {
       return;
     }
 
-    // Start watching for property changes
     const componentKey = this.selectedComponentKey;
     if (componentKey) {
-      this.debugHost.startPropertyWatching({ componentKey, pollInterval: 500 });
+      this.debugHost.startPropertyWatching({ componentKey, pollInterval: PROPERTY_POLL_MS });
       this.selectedTreeNodeKey = componentKey;
     }
 
-    // Load enhanced info
     this.loadEnhancedInfo();
-    this.markPropertyRowsDirty();
 
-    // Refresh tree if needed
-    if (!this.componentTree?.length) {
+    if (!this.componentTree.length) {
       this.loadComponentTree();
     }
   }
@@ -309,7 +329,11 @@ export class SidebarApp implements ICustomElementViewModel {
     return this.selectedElement.instanceId || this.selectedElement.key || this.selectedElement.name || null;
   }
 
-  clearSelection() {
+  get selectedKindLabel(): string {
+    return this.selectedNodeType === 'custom-attribute' ? 'custom attribute' : 'custom element';
+  }
+
+  clearSelection(): void {
     this.debugHost.stopPropertyWatching();
     this.selectedElement = null;
     this.selectedElementAttributes = [];
@@ -318,15 +342,36 @@ export class SidebarApp implements ICustomElementViewModel {
     this.clearEnhancedInfo();
   }
 
-  // Section expansion
-  toggleSection(sectionId: string) {
-    this.expandedSections[sectionId] = !this.expandedSections[sectionId];
+  onPropertyChanges(changes: PropertyChangeRecord[] | undefined, snapshot: PropertySnapshot | undefined): void {
+    if (!changes?.length || !this.selectedElement) return;
+
+    const selectedKey = this.selectedComponentKey;
+    if (!selectedKey || snapshot?.componentKey !== selectedKey) return;
+
+    for (const change of changes) {
+      const bindable = this.selectedElement.bindables?.find((b) => b.name === change.propertyName);
+      if (bindable) {
+        bindable.value = change.newValue;
+        continue;
+      }
+      const property = this.selectedElement.properties?.find((p) => p.name === change.propertyName);
+      if (property) {
+        property.value = change.newValue;
+      }
+    }
   }
 
-  // Element picker
-  toggleElementPicker() {
-    this.isElementPickerActive = !this.isElementPickerActive;
+  // Sections
 
+  toggleSection(id: SectionId): void {
+    this.expandedSections[id] = !this.expandedSections[id];
+    this.persist(SECTIONS_KEY, JSON.stringify(this.expandedSections));
+  }
+
+  // Toolbar
+
+  toggleElementPicker(): void {
+    this.isElementPickerActive = !this.isElementPickerActive;
     if (this.isElementPickerActive) {
       this.debugHost.startElementPicker();
     } else {
@@ -334,19 +379,109 @@ export class SidebarApp implements ICustomElementViewModel {
     }
   }
 
-  toggleFollowChromeSelection() {
+  toggleFollowChromeSelection(): void {
     this.followChromeSelection = !this.followChromeSelection;
-    try {
-      localStorage.setItem('au-devtools.followChromeSelection', String(this.followChromeSelection));
-    } catch {}
+    this.persist(FOLLOW_SELECTION_KEY, String(this.followChromeSelection));
+    if (this.followChromeSelection) {
+      this.debugHost.refreshSelection();
+    }
+  }
+
+  // Search
+
+  onSearchInput(event: Event): void {
+    this.searchQuery = (event.target as HTMLInputElement).value;
+    this.runSearch();
+  }
+
+  async runSearch(): Promise<void> {
+    const query = this.searchQuery.trim().toLowerCase();
+    const sequence = ++this.searchSequence;
+
+    if (!query) {
+      this.searchResults = [];
+      this.isSearchOpen = false;
+      this.activeSearchIndex = -1;
+      return;
+    }
+
+    const results = await this.debugHost.searchComponents(query);
+    if (sequence !== this.searchSequence) return;
+
+    this.searchResults = results;
+    this.isSearchOpen = true;
+    this.activeSearchIndex = results.length ? 0 : -1;
+  }
+
+  openSearch(): void {
+    if (this.searchQuery.trim() && this.searchResults.length) {
+      this.isSearchOpen = true;
+    }
+  }
+
+  closeSearch(): void {
+    this.isSearchOpen = false;
+  }
+
+  onSearchKeydown(event: KeyboardEvent): void {
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        this.openSearch();
+        this.moveSearchSelection(1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        this.moveSearchSelection(-1);
+        break;
+      case 'Enter': {
+        const result = this.searchResults[this.activeSearchIndex] ?? this.searchResults[0];
+        if (result) {
+          event.preventDefault();
+          this.selectSearchResult(result);
+        }
+        break;
+      }
+      case 'Escape':
+        event.preventDefault();
+        this.clearSearch();
+        break;
+    }
+  }
+
+  private moveSearchSelection(delta: number): void {
+    const count = this.searchResults.length;
+    if (!count) return;
+    this.activeSearchIndex = (this.activeSearchIndex + delta + count) % count;
+  }
+
+  setActiveSearchIndex(index: number): void {
+    this.activeSearchIndex = index;
+  }
+
+  isActiveSearchResult(index: number): boolean {
+    return this.activeSearchIndex === index;
+  }
+
+  selectSearchResult(result: SearchResult, event?: Event): void {
+    event?.preventDefault();
+    this.debugHost.selectComponentByKey(result.key);
+    this.clearSearch();
+  }
+
+  clearSearch(): void {
+    this.searchSequence++;
+    this.searchQuery = '';
+    this.searchResults = [];
+    this.isSearchOpen = false;
+    this.activeSearchIndex = -1;
   }
 
   // Component tree
+
   async loadComponentTree(): Promise<void> {
     try {
-      const tree = await this.debugHost.getComponentTree();
-      this.componentTree = tree;
-      this.treeRevision++;
+      this.componentTree = await this.debugHost.getComponentTree();
     } catch {
       this.componentTree = [];
     }
@@ -360,13 +495,7 @@ export class SidebarApp implements ICustomElementViewModel {
     event?.stopPropagation();
     if (!node.hasChildren) return;
 
-    const key = node.key;
-    if (this.expandedTreeNodes.has(key)) {
-      this.expandedTreeNodes.delete(key);
-    } else {
-      this.expandedTreeNodes.add(key);
-    }
-    this.treeRevision++;
+    this.expandedTreeKeys[node.key] = !this.expandedTreeKeys[node.key];
   }
 
   selectTreeNode(node: ComponentTreeNode): void {
@@ -374,8 +503,29 @@ export class SidebarApp implements ICustomElementViewModel {
     this.debugHost.selectComponentByKey(node.key);
   }
 
-  getTreeRows(_revision: number = this.treeRevision): ComponentTreeRow[] {
-    if (!this.componentTree?.length) return [];
+  onTreeKeydown(event: KeyboardEvent, node: ComponentTreeNode): void {
+    switch (event.key) {
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        this.selectTreeNode(node);
+        break;
+      case 'ArrowRight':
+        if (node.hasChildren && !this.expandedTreeKeys[node.key]) {
+          event.preventDefault();
+          this.expandedTreeKeys[node.key] = true;
+        }
+        break;
+      case 'ArrowLeft':
+        if (this.expandedTreeKeys[node.key]) {
+          event.preventDefault();
+          this.expandedTreeKeys[node.key] = false;
+        }
+        break;
+    }
+  }
+
+  get treeRows(): ComponentTreeRow[] {
     return this.flattenTreeNodes(this.componentTree, 0);
   }
 
@@ -384,7 +534,7 @@ export class SidebarApp implements ICustomElementViewModel {
     for (const node of nodes) {
       if (!node) continue;
       rows.push({ node, depth });
-      if (this.expandedTreeNodes.has(node.key) && node.children?.length) {
+      if (this.expandedTreeKeys[node.key] && node.children?.length) {
         rows.push(...this.flattenTreeNodes(node.children, depth + 1));
       }
     }
@@ -392,7 +542,7 @@ export class SidebarApp implements ICustomElementViewModel {
   }
 
   isTreeNodeExpanded(node: ComponentTreeNode): boolean {
-    return this.expandedTreeNodes.has(node.key);
+    return this.expandedTreeKeys[node.key] === true;
   }
 
   isTreeNodeSelected(node: ComponentTreeNode): boolean {
@@ -404,20 +554,13 @@ export class SidebarApp implements ICustomElementViewModel {
   }
 
   get componentTreeCount(): number {
-    const countNodes = (nodes: ComponentTreeNode[]): number => {
-      let count = 0;
-      for (const node of nodes) {
-        count++;
-        if (node.children?.length) {
-          count += countNodes(node.children);
-        }
-      }
-      return count;
-    };
+    const countNodes = (nodes: ComponentTreeNode[]): number =>
+      nodes.reduce((total, node) => total + 1 + (node.children?.length ? countNodes(node.children) : 0), 0);
     return countNodes(this.componentTree);
   }
 
-  // Timeline / Interaction Recorder
+  // Timeline
+
   async startRecording(): Promise<void> {
     this.isRecording = true;
     await this.debugHost.startInteractionRecording();
@@ -428,27 +571,30 @@ export class SidebarApp implements ICustomElementViewModel {
     await this.debugHost.stopInteractionRecording();
   }
 
+  onInteraction(entry: EventInteractionRecord | undefined): void {
+    if (!this.isRecording || !entry) return;
+    this.timelineEvents.push(entry);
+    if (this.timelineEvents.length > TIMELINE_LIMIT) {
+      this.timelineEvents.splice(0, this.timelineEvents.length - TIMELINE_LIMIT);
+    }
+  }
+
   clearTimeline(): void {
     this.timelineEvents = [];
-    this.expandedTimelineEvents.clear();
+    this.expandedTimelineIds = {};
     this.debugHost.clearInteractionLog();
   }
 
   toggleTimelineEvent(event: EventInteractionRecord): void {
-    const id = event.id;
-    if (this.expandedTimelineEvents.has(id)) {
-      this.expandedTimelineEvents.delete(id);
-    } else {
-      this.expandedTimelineEvents.add(id);
-    }
-    this.timelineEvents = [...this.timelineEvents];
+    this.expandedTimelineIds[event.id] = !this.expandedTimelineIds[event.id];
   }
 
   isTimelineEventExpanded(event: EventInteractionRecord): boolean {
-    return this.expandedTimelineEvents.has(event.id);
+    return this.expandedTimelineIds[event.id] === true;
   }
 
-  selectTimelineComponent(event: EventInteractionRecord): void {
+  selectTimelineComponent(event: EventInteractionRecord, domEvent?: Event): void {
+    domEvent?.stopPropagation();
     if (event.target?.componentKey) {
       this.debugHost.selectComponentByKey(event.target.componentKey);
     }
@@ -462,172 +608,92 @@ export class SidebarApp implements ICustomElementViewModel {
     return this.timelineEvents.length;
   }
 
+  get canClearTimeline(): boolean {
+    return this.hasTimelineEvents || this.isRecording;
+  }
+
   formatTimelineTimestamp(timestamp: number): string {
-    const date = new Date(timestamp);
-    const time = date.toLocaleTimeString('en-US', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-    const ms = String(date.getMilliseconds()).padStart(3, '0');
-    return `${time}.${ms}`;
+    return formatTimestamp(timestamp);
   }
 
-  getTimelineEventTypeClass(type: string): string {
-    const typeMap: Record<string, string> = {
-      'property-change': 'event-property',
-      'lifecycle': 'event-lifecycle',
-      'interaction': 'event-interaction',
-      'binding': 'event-binding',
-    };
-    return typeMap[type] || 'event-default';
+  timelineEventClass(event: EventInteractionRecord): string {
+    return `mode-${event.mode || 'unknown'}`;
   }
 
-  // Template Debugger
+  snapshotRows(snapshot: Record<string, unknown> | null | undefined): SnapshotRow[] {
+    if (!snapshot) return [];
+    return Object.entries(snapshot).map(([key, value]) => ({ key, value: formatExpandedValue(value) }));
+  }
+
+  // Template debugger
+
   get hasTemplateInfo(): boolean {
-    return this.templateSnapshot !== null &&
-           (this.templateSnapshot.bindings.length > 0 ||
-            this.templateSnapshot.controllers.length > 0);
+    return this.templateBindingsCount > 0 || this.templateControllersCount > 0;
   }
 
   get templateBindings(): TemplateBinding[] {
-    return this.templateSnapshot?.bindings || [];
+    return this.templateSnapshot?.bindings ?? [];
   }
 
   get templateControllers(): TemplateControllerInfo[] {
-    return this.templateSnapshot?.controllers || [];
+    return this.templateSnapshot?.controllers ?? [];
   }
 
   get templateBindingsCount(): number {
-    return this.templateSnapshot?.bindings?.length || 0;
+    return this.templateSnapshot?.bindings?.length ?? 0;
   }
 
   get templateControllersCount(): number {
-    return this.templateSnapshot?.controllers?.length || 0;
+    return this.templateSnapshot?.controllers?.length ?? 0;
+  }
+
+  get hasTemplateMeta(): boolean {
+    const snapshot = this.templateSnapshot;
+    return !!snapshot && (snapshot.hasSlots || snapshot.shadowMode !== 'none' || snapshot.isContainerless);
   }
 
   toggleBindingExpand(binding: TemplateBinding): void {
-    if (this.expandedBindings.has(binding.id)) {
-      this.expandedBindings.delete(binding.id);
-    } else {
-      this.expandedBindings.add(binding.id);
-    }
-    this.templateSnapshot = { ...this.templateSnapshot! };
+    this.expandedBindingIds[binding.id] = !this.expandedBindingIds[binding.id];
   }
 
   isBindingExpanded(binding: TemplateBinding): boolean {
-    return this.expandedBindings.has(binding.id);
+    return this.expandedBindingIds[binding.id] === true;
   }
 
   toggleControllerExpand(controller: TemplateControllerInfo): void {
-    if (this.expandedControllers.has(controller.id)) {
-      this.expandedControllers.delete(controller.id);
-    } else {
-      this.expandedControllers.add(controller.id);
-    }
-    this.templateSnapshot = { ...this.templateSnapshot! };
+    this.expandedControllerIds[controller.id] = !this.expandedControllerIds[controller.id];
   }
 
   isControllerExpanded(controller: TemplateControllerInfo): boolean {
-    return this.expandedControllers.has(controller.id);
+    return this.expandedControllerIds[controller.id] === true;
   }
 
-  getBindingTypeIcon(type: string): string {
-    const icons: Record<string, string> = {
-      'property': '&#8594;',
-      'attribute': '&#64;',
-      'interpolation': '&#36;{}',
-      'listener': '&#9889;',
-      'ref': '&#128279;',
-      'let': '&#119897;',
-    };
-    return icons[type] || '&#8226;';
+  bindingTypeLabel(type: string): string {
+    return BINDING_TYPE_LABELS[type] ?? type;
   }
 
-  getBindingModeClass(mode: string): string {
-    const classes: Record<string, string> = {
-      'oneTime': 'mode-one-time',
-      'toView': 'mode-to-view',
-      'fromView': 'mode-from-view',
-      'twoWay': 'mode-two-way',
-      'default': 'mode-default',
-    };
-    return classes[mode] || 'mode-default';
+  bindingModeLabel(mode: string | undefined): string {
+    return BINDING_MODE_LABELS[mode ?? 'default'] ?? BINDING_MODE_LABELS.default;
   }
 
-  getBindingModeLabel(mode: string): string {
-    const labels: Record<string, string> = {
-      'oneTime': 'one-time',
-      'toView': '→',
-      'fromView': '←',
-      'twoWay': '↔',
-      'default': '→',
-    };
-    return labels[mode] || '→';
-  }
-
-  getControllerTypeIcon(type: string): string {
-    const icons: Record<string, string> = {
-      'if': '&#10067;',
-      'else': '&#10068;',
-      'repeat': '&#8635;',
-      'with': '&#128230;',
-      'switch': '&#9898;',
-      'case': '&#9899;',
-      'au-slot': '&#128193;',
-      'portal': '&#128316;',
-    };
-    return icons[type] || '&#9670;';
+  bindingModeClass(mode: string | undefined): string {
+    return BINDING_MODE_CLASSES[mode ?? 'default'] ?? BINDING_MODE_CLASSES.default;
   }
 
   formatBindingValue(value: unknown): string {
-    if (value === undefined) return 'undefined';
-    if (value === null) return 'null';
-    if (typeof value === 'string') return `"${value}"`;
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
+    return formatExpandedValue(value);
   }
 
-  // Search
-  handleSearchInput(event: Event) {
-    const input = event.target as HTMLInputElement;
-    this.searchQuery = input.value;
-
-    if (this.searchQuery.trim()) {
-      this.performSearch();
-      this.isSearchOpen = true;
-    } else {
-      this.searchResults = [];
-      this.isSearchOpen = false;
-    }
+  isConditionalController(controller: TemplateControllerInfo): boolean {
+    return controller.type === 'if' || controller.type === 'else';
   }
 
-  async performSearch() {
-    const query = this.searchQuery.toLowerCase().trim();
-    if (!query) {
-      this.searchResults = [];
-      return;
-    }
-
-    const results = await this.debugHost.searchComponents(query);
-    this.searchResults = results;
-  }
-
-  selectSearchResult(result: SearchResult) {
-    this.debugHost.selectComponentByKey(result.key);
-    this.searchQuery = '';
-    this.searchResults = [];
-    this.isSearchOpen = false;
-  }
-
-  clearSearch() {
-    this.searchQuery = '';
-    this.searchResults = [];
-    this.isSearchOpen = false;
+  hasRepeatItems(controller: TemplateControllerInfo): boolean {
+    return controller.type === 'repeat' && (controller.items?.length ?? 0) > 0;
   }
 
   // Enhanced info
+
   async loadEnhancedInfo(): Promise<void> {
     const componentKey = this.selectedComponentKey;
     if (!componentKey) {
@@ -636,7 +702,7 @@ export class SidebarApp implements ICustomElementViewModel {
     }
 
     try {
-      const [hooks, computed, enhancedDI, route, slots, template] = await Promise.all([
+      const [hooks, computed, di, route, slots, template] = await Promise.all([
         this.debugHost.getLifecycleHooks(componentKey),
         this.debugHost.getComputedProperties(componentKey),
         this.debugHost.getEnhancedDISnapshot(componentKey),
@@ -645,27 +711,29 @@ export class SidebarApp implements ICustomElementViewModel {
         this.debugHost.getTemplateSnapshot(componentKey),
       ]);
 
+      if (componentKey !== this.selectedComponentKey) return;
+
       this.lifecycleHooks = hooks;
-      this.computedProperties = computed || [];
+      this.computedProperties = computed ?? [];
       this.routeInfo = route;
       this.slotInfo = slots;
       this.templateSnapshot = template;
-      this.expandedBindings.clear();
-      this.expandedControllers.clear();
+      this.expandedBindingIds = {};
+      this.expandedControllerIds = {};
 
-      if (enhancedDI && 'version' in enhancedDI && enhancedDI.version === 2) {
-        this.enhancedDI = enhancedDI as EnhancedDISnapshot;
+      if (di && 'version' in di && di.version === 2) {
+        this.enhancedDI = di as EnhancedDISnapshot;
         this.dependencies = null;
       } else {
         this.enhancedDI = null;
-        this.dependencies = enhancedDI as DISnapshot;
+        this.dependencies = (di as DISnapshot | null) ?? null;
       }
     } catch {
       this.clearEnhancedInfo();
     }
   }
 
-  clearEnhancedInfo() {
+  clearEnhancedInfo(): void {
     this.lifecycleHooks = null;
     this.computedProperties = [];
     this.dependencies = null;
@@ -674,22 +742,20 @@ export class SidebarApp implements ICustomElementViewModel {
     this.routeInfo = null;
     this.slotInfo = null;
     this.templateSnapshot = null;
-    this.expandedBindings.clear();
-    this.expandedControllers.clear();
+    this.expandedBindingIds = {};
+    this.expandedControllerIds = {};
   }
 
   get implementedHooksCount(): number {
-    if (!this.lifecycleHooks?.hooks) return 0;
-    return this.lifecycleHooks.hooks.filter(h => h.implemented).length;
+    return this.lifecycleHooks?.hooks?.filter((h) => h.implemented).length ?? 0;
   }
 
   get totalHooksCount(): number {
-    return this.lifecycleHooks?.hooks?.length || 0;
+    return this.lifecycleHooks?.hooks?.length ?? 0;
   }
 
   get activeSlotCount(): number {
-    if (!this.slotInfo?.slots) return 0;
-    return this.slotInfo.slots.filter(s => s.hasContent).length;
+    return this.slotInfo?.slots?.filter((s) => s.hasContent).length ?? 0;
   }
 
   get hasBindables(): boolean {
@@ -705,7 +771,7 @@ export class SidebarApp implements ICustomElementViewModel {
   }
 
   get hasController(): boolean {
-    return !!(this.selectedElement as any)?.controller?.properties?.length;
+    return (this.selectedElement?.controller?.properties?.length ?? 0) > 0;
   }
 
   get hasCustomAttributes(): boolean {
@@ -713,7 +779,7 @@ export class SidebarApp implements ICustomElementViewModel {
   }
 
   get hasLifecycleHooks(): boolean {
-    return (this.lifecycleHooks?.hooks?.length ?? 0) > 0;
+    return this.totalHooksCount > 0;
   }
 
   get hasComputedProperties(): boolean {
@@ -736,274 +802,93 @@ export class SidebarApp implements ICustomElementViewModel {
     return !!this.enhancedDI?.containerHierarchy;
   }
 
+  get hasAnyDIInfo(): boolean {
+    return this.hasEnhancedDependencies || this.hasContainerHierarchy || this.availableServicesCount > 0;
+  }
+
   get availableServicesCount(): number {
     return this.enhancedDI?.availableServices?.length ?? 0;
   }
 
-  get containerAncestorsReversed(): Array<{ id: number; depth: number; isRoot: boolean; registrationCount: number }> {
-    if (!this.enhancedDI?.containerHierarchy?.ancestors) return [];
-    return [...this.enhancedDI.containerHierarchy.ancestors].reverse();
+  get containerAncestorsReversed(): ContainerInfo[] {
+    const ancestors = this.enhancedDI?.containerHierarchy?.ancestors ?? [];
+    return [...ancestors].reverse();
+  }
+
+  get currentContainerLabel(): string {
+    return this.enhancedDI?.containerHierarchy?.current?.ownerName || 'current';
   }
 
   toggleAvailableServices(): void {
     this.showAvailableServices = !this.showAvailableServices;
   }
 
-  formatResolvedValue(value: unknown): string {
-    if (value === null) return 'null';
-    if (value === undefined) return 'undefined';
-    if (typeof value === 'string') return `"${value}"`;
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    if (typeof value === 'object') {
-      if ('__type__' in (value as object)) {
-        const typed = value as { __type__: string };
-        return `${typed.__type__} {...}`;
-      }
-      return JSON.stringify(value).slice(0, 50) + (JSON.stringify(value).length > 50 ? '...' : '');
-    }
-    return String(value);
+  previewRows(preview: Record<string, unknown> | undefined): SnapshotRow[] {
+    return this.snapshotRows(preview);
   }
 
   get hasRouteInfo(): boolean {
-    return !!(this.routeInfo?.currentRoute);
+    return !!this.routeInfo?.currentRoute;
   }
 
   get hasSlots(): boolean {
     return (this.slotInfo?.slots?.length ?? 0) > 0;
   }
 
-  // Property editing
-  editProperty(property: Property & { originalValue?: unknown }) {
-    const editableTypes = ['string', 'number', 'boolean', 'bigint', 'null', 'undefined'];
-    if (editableTypes.includes(property.type) || property.canEdit) {
-      property.isEditing = true;
-      (property as any).originalValue = property.value;
-    }
-  }
-
-  saveProperty(property: Property, newValue: string) {
-    const originalType = property.type;
-    let convertedValue: unknown = newValue;
-
-    try {
-      switch (originalType) {
-        case 'number': {
-          const numValue = Number(newValue);
-          if (isNaN(numValue)) {
-            this.revertProperty(property);
-            return;
-          }
-          convertedValue = numValue;
-          break;
-        }
-        case 'boolean': {
-          const lower = newValue.toLowerCase();
-          if (lower !== 'true' && lower !== 'false') {
-            this.revertProperty(property);
-            return;
-          }
-          convertedValue = lower === 'true';
-          break;
-        }
-        case 'null':
-          convertedValue = newValue === 'null' || newValue === '' ? null : newValue;
-          if (convertedValue !== null) property.type = 'string';
-          break;
-        case 'undefined':
-          convertedValue = newValue === 'undefined' || newValue === '' ? undefined : newValue;
-          if (convertedValue !== undefined) property.type = 'string';
-          break;
-        default:
-          convertedValue = newValue;
-          property.type = 'string';
-          break;
-      }
-
-      property.value = convertedValue;
-      property.isEditing = false;
-      delete (property as any).originalValue;
-
-      this.plat.queueMicrotask(() => {
-        this.debugHost.updateValues(this.selectedElement!, property);
-        this.markPropertyRowsDirty();
-      });
-    } catch {
-      this.revertProperty(property);
-    }
-  }
-
-  cancelPropertyEdit(property: Property) {
-    this.revertProperty(property);
-  }
-
-  private revertProperty(property: Property) {
-    property.value = (property as any).originalValue;
-    property.isEditing = false;
-    delete (property as any).originalValue;
-  }
-
-  async copyPropertyValue(property: Property, event?: Event) {
-    event?.stopPropagation();
-
-    let valueToCopy: string;
-    if (property.value === null) {
-      valueToCopy = 'null';
-    } else if (property.value === undefined) {
-      valueToCopy = 'undefined';
-    } else if (typeof property.value === 'object') {
-      try {
-        valueToCopy = JSON.stringify(property.value, null, 2);
-      } catch {
-        valueToCopy = String(property.value);
-      }
-    } else {
-      valueToCopy = String(property.value);
-    }
-
-    try {
-      await navigator.clipboard.writeText(valueToCopy);
-      this.copiedPropertyId = `${property.name}-${property.debugId || ''}`;
-      setTimeout(() => {
-        this.copiedPropertyId = null;
-      }, 1500);
-    } catch {}
-  }
-
-  isPropertyCopied(property: Property): boolean {
-    return this.copiedPropertyId === `${property.name}-${property.debugId || ''}`;
-  }
-
-  // Property expansion
-  togglePropertyExpansion(property: Property) {
-    if (!property.canExpand) return;
-
-    if (!property.isExpanded) {
-      if (!property.expandedValue) {
-        this.loadExpandedPropertyValue(property);
-      } else {
-        property.isExpanded = true;
-      }
-    } else {
-      property.isExpanded = false;
-    }
-    this.markPropertyRowsDirty();
-  }
-
-  private loadExpandedPropertyValue(property: Property) {
-    if (property.debugId && chrome?.devtools) {
-      const code = `window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.getExpandedDebugValueForId(${property.debugId})`;
-
-      chrome.devtools.inspectedWindow.eval(code, (result: any, isException?: any) => {
-        if (isException) return;
-
-        property.expandedValue = result;
-        property.isExpanded = true;
-        this.markPropertyRowsDirty();
-      });
-    }
-  }
-
-  private markPropertyRowsDirty() {
-    this.propertyRowsRevision++;
-  }
-
-  getPropertyRows(properties?: Property[], _revision: number = this.propertyRowsRevision): PropertyRow[] {
-    if (!properties?.length) return [];
-    return this.flattenProperties(properties, 0);
-  }
-
-  private flattenProperties(properties: Property[], depth: number): PropertyRow[] {
-    const rows: PropertyRow[] = [];
-    for (const prop of properties) {
-      if (!prop) continue;
-      rows.push({ property: prop, depth });
-      if (prop.isExpanded && prop.expandedValue?.properties?.length) {
-        rows.push(...this.flattenProperties(prop.expandedValue.properties, depth + 1));
-      }
-    }
-    return rows;
-  }
-
   // Expression evaluation
-  async evaluateExpression() {
+
+  get canEvaluate(): boolean {
+    return !!this.selectedComponentKey && this.expressionInput.trim().length > 0;
+  }
+
+  onExpressionKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.evaluateExpression();
+    }
+  }
+
+  async evaluateExpression(): Promise<void> {
     const expression = this.expressionInput.trim();
-    if (!expression || !this.selectedElement) return;
+    const componentKey = this.selectedComponentKey;
+    if (!expression) return;
 
     this.expressionError = '';
     this.expressionResult = '';
     this.expressionResultType = '';
 
-    if (!this.expressionHistory.includes(expression)) {
-      this.expressionHistory = [expression, ...this.expressionHistory.slice(0, 9)];
-    }
-
-    const componentKey = this.selectedComponentKey;
     if (!componentKey) {
       this.expressionError = 'No component selected';
       return;
     }
 
-    const code = `
-      (function() {
-        try {
-          var hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
-          if (!hook || !hook.evaluateInComponentContext) {
-            return { error: 'DevTools hook not available' };
-          }
-          var result = hook.evaluateInComponentContext(${JSON.stringify(componentKey)}, ${JSON.stringify(expression)});
-          return result;
-        } catch (e) {
-          return { error: e.message || String(e) };
-        }
-      })()
-    `;
-
-    if (chrome?.devtools?.inspectedWindow) {
-      chrome.devtools.inspectedWindow.eval(code, (result: any, isException?: any) => {
-        if (isException) {
-          this.expressionError = String(isException);
-          return;
-        }
-
-        if (result?.error) {
-          this.expressionError = result.error;
-          return;
-        }
-
-        if (result?.success) {
-          this.expressionResultType = result.type || typeof result.value;
-          try {
-            if (result.value === undefined) {
-              this.expressionResult = 'undefined';
-            } else if (result.value === null) {
-              this.expressionResult = 'null';
-            } else if (typeof result.value === 'object') {
-              this.expressionResult = JSON.stringify(result.value, null, 2);
-            } else {
-              this.expressionResult = String(result.value);
-            }
-          } catch {
-            this.expressionResult = String(result.value);
-          }
-        } else {
-          this.expressionError = 'Unknown response format';
-        }
-      });
+    if (!this.expressionHistory.includes(expression)) {
+      this.expressionHistory = [expression, ...this.expressionHistory.slice(0, EXPRESSION_HISTORY_LIMIT - 1)];
     }
+
+    const result = await this.debugHost.evaluateExpression(componentKey, expression);
+    if (!result.success) {
+      this.expressionError = result.error || 'Evaluation failed';
+      return;
+    }
+
+    this.expressionResultType = result.type || typeof result.value;
+    this.expressionResult = formatExpandedValue(result.value);
   }
 
-  selectHistoryExpression(expr: string) {
-    this.expressionInput = expr;
+  selectHistoryExpression(expression: string): void {
+    this.expressionInput = expression;
   }
 
-  clearExpressionResult() {
+  clearExpressionResult(): void {
     this.expressionResult = '';
     this.expressionResultType = '';
     this.expressionError = '';
   }
 
-  // Export
-  async exportComponentAsJson() {
+  // Export and reveal
+
+  async exportComponentAsJson(): Promise<void> {
     if (!this.selectedElement) return;
 
     const exportData = {
@@ -1013,89 +898,45 @@ export class SidebarApp implements ICustomElementViewModel {
         key: this.selectedElement.key,
         exportedAt: new Date().toISOString(),
       },
-      bindables: this.serializeProperties(this.selectedElement.bindables || []),
-      properties: this.serializeProperties(this.selectedElement.properties || []),
-      overrideContext: this.serializeProperties(this.selectedElement.overrideContext || []),
-      customAttributes: this.selectedElementAttributes.map(attr => ({
+      bindables: serializeProperties(this.selectedElement.bindables),
+      properties: serializeProperties(this.selectedElement.properties),
+      overrideContext: serializeProperties(this.selectedElement.overrideContext),
+      customAttributes: this.selectedElementAttributes.map((attr) => ({
         name: attr.name,
-        bindables: this.serializeProperties(attr.bindables || []),
-        properties: this.serializeProperties(attr.properties || []),
+        bindables: serializeProperties(attr.bindables),
+        properties: serializeProperties(attr.properties),
       })),
     };
 
-    const jsonString = JSON.stringify(exportData, null, 2);
-
     try {
-      await navigator.clipboard.writeText(jsonString);
-      this.copiedPropertyId = '__export__';
-      setTimeout(() => {
-        this.copiedPropertyId = null;
-      }, 1500);
-    } catch {}
-  }
-
-  private serializeProperties(properties: Property[]): Record<string, unknown> {
-    const result: Record<string, unknown> = {};
-    for (const prop of properties) {
-      if (prop?.name) {
-        result[prop.name] = { value: prop.value, type: prop.type };
-      }
+      await navigator.clipboard.writeText(JSON.stringify(exportData, null, 2));
+    } catch {
+      return;
     }
-    return result;
+
+    this.isExportCopied = true;
+    if (this.exportCopiedTimer) clearTimeout(this.exportCopiedTimer);
+    this.exportCopiedTimer = setTimeout(() => {
+      this.isExportCopied = false;
+      this.exportCopiedTimer = null;
+    }, COPIED_FEEDBACK_MS);
   }
 
-  get isExportCopied(): boolean {
-    return this.copiedPropertyId === '__export__';
-  }
-
-  // Reveal in Elements
-  revealInElements() {
+  revealInElements(): void {
     if (!this.selectedElement) return;
     this.debugHost.revealInElements({
       name: this.selectedElement.name,
       type: this.selectedNodeType,
       customElementInfo: this.selectedNodeType === 'custom-element' ? this.selectedElement : null,
-      customAttributesInfo: this.selectedNodeType === 'custom-attribute' ? [this.selectedElement] : this.selectedElementAttributes,
+      customAttributesInfo:
+        this.selectedNodeType === 'custom-attribute' ? [this.selectedElement] : this.selectedElementAttributes,
     });
   }
-
-  // Format property value for display
-  formatPropertyValue(value: unknown): string {
-    if (value === null) return 'null';
-    if (value === undefined) return 'undefined';
-    if (typeof value === 'string') return `"${value}"`;
-    if (typeof value === 'object') {
-      if (Array.isArray(value)) return `Array(${value.length})`;
-      return '{...}';
-    }
-    return String(value);
-  }
-
-  getPropertyTypeClass(type: string): string {
-    if (type?.startsWith('context-')) {
-      type = type.replace('context-', '');
-    }
-    const typeMap: Record<string, string> = {
-      string: 'type-string',
-      number: 'type-number',
-      boolean: 'type-boolean',
-      null: 'type-null',
-      undefined: 'type-null',
-      object: 'type-object',
-      array: 'type-object',
-      function: 'type-function',
-    };
-    return typeMap[type] || 'type-default';
-  }
 }
 
-interface SearchResult {
-  key: string;
-  name: string;
-  type: 'custom-element' | 'custom-attribute';
-}
-
-interface PropertyRow {
-  property: Property;
-  depth: number;
+function normalizeControllerInfo(info: IControllerInfo): IControllerInfo {
+  info.bindables = info.bindables ?? [];
+  info.properties = info.properties ?? [];
+  info.overrideContext = info.overrideContext ?? [];
+  return info;
 }

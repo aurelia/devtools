@@ -38,8 +38,8 @@ test.describe('Sidebar Panel', () => {
     await page.waitForSelector('sidebar-app', { timeout: 10000 });
     await page.waitForTimeout(1000);
 
-    const checkingState = await page.locator('text=Detecting Aurelia').count();
-    const notFoundState = await page.locator('text=No Aurelia detected').count();
+    const checkingState = await page.locator('text=Looking for Aurelia').count();
+    const notFoundState = await page.locator('text=No Aurelia application detected').count();
     const detectedContent = await page.locator('.sidebar-content').count();
 
     expect(checkingState + notFoundState + detectedContent).toBeGreaterThan(0);
@@ -111,7 +111,7 @@ test.describe('Sidebar Panel', () => {
 
     await page.waitForTimeout(500);
 
-    const emptyState = page.locator('.empty-state');
+    const emptyState = page.locator('.empty');
     await expect(emptyState).toBeVisible();
 
     await page.close();
@@ -263,10 +263,10 @@ test.describe('Sidebar Panel', () => {
 
     await page.waitForTimeout(500);
 
-    const bindingContextLabel = page.locator('.binding-context-label');
+    const bindingContextLabel = page.locator('.context-note');
     await expect(bindingContextLabel).toBeVisible();
 
-    const selectedElement = page.locator('.selected-element');
+    const selectedElement = page.locator('.context-tag');
     await expect(selectedElement).toContainText('div');
 
     await page.close();
@@ -288,10 +288,10 @@ test.describe('Sidebar Panel', () => {
 
     await page.waitForTimeout(500);
 
-    const invalidatedMessage = page.locator('.state-message.error');
+    const invalidatedMessage = page.locator('.notice-error');
     await expect(invalidatedMessage).toBeVisible();
 
-    const reloadText = page.locator('text=reload DevTools');
+    const reloadText = page.locator('text=reopen DevTools');
     await expect(reloadText).toBeVisible();
 
     await page.close();
@@ -407,7 +407,7 @@ test.describe('Sidebar Expression Evaluator', () => {
     const expressionInput = page.locator('.expression-input');
     await expect(expressionInput).toBeVisible();
 
-    const runButton = page.locator('.eval-btn');
+    const runButton = page.locator('.run-btn');
     await expect(runButton).toBeVisible();
 
     await page.close();

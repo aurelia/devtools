@@ -1,13 +1,17 @@
 import './setup';
-import { ChromeTest } from './setup';
-import { stubPlatform } from './helpers';
-import type { AureliaInfo, IControllerInfo, Property } from '@/shared/types';
-
-let SidebarAppClass: any;
+import { DI } from 'aurelia';
+import type { AureliaInfo, IControllerInfo } from '@/shared/types';
+import { SidebarApp } from '@/sidebar/sidebar-app';
 
 function stubSidebarDebugHost(overrides: Partial<Record<string, any>> = {}) {
   return {
     attach: jest.fn(),
+    detach: jest.fn(),
+    isRuntimeAvailable: jest.fn().mockReturnValue(true),
+    getThemeName: jest.fn().mockReturnValue('default'),
+    onRuntimeMessage: jest.fn().mockReturnValue(jest.fn()),
+    refreshSelection: jest.fn(),
+    getDetectionState: jest.fn().mockResolvedValue({ state: 'detected', version: 2 }),
     startElementPicker: jest.fn(),
     stopElementPicker: jest.fn(),
     startPropertyWatching: jest.fn(),
@@ -18,183 +22,265 @@ function stubSidebarDebugHost(overrides: Partial<Record<string, any>> = {}) {
     selectComponentByKey: jest.fn(),
     getLifecycleHooks: jest.fn().mockResolvedValue(null),
     getComputedProperties: jest.fn().mockResolvedValue([]),
-    getDependencies: jest.fn().mockResolvedValue(null),
     getEnhancedDISnapshot: jest.fn().mockResolvedValue(null),
     getRouteInfo: jest.fn().mockResolvedValue(null),
     getSlotInfo: jest.fn().mockResolvedValue(null),
+    getTemplateSnapshot: jest.fn().mockResolvedValue(null),
     getComponentTree: jest.fn().mockResolvedValue([]),
     startInteractionRecording: jest.fn().mockResolvedValue(true),
     stopInteractionRecording: jest.fn().mockResolvedValue(true),
     clearInteractionLog: jest.fn(),
-    getTemplateSnapshot: jest.fn().mockResolvedValue(null),
-    ...overrides
+    evaluateExpression: jest.fn().mockResolvedValue({ success: true, value: 1, type: 'number' }),
+    getExpandedValue: jest.fn().mockResolvedValue(null),
+    ...overrides,
   };
 }
 
 function ci(name: string, key?: string): IControllerInfo {
-  return {
-    name,
-    key: key ?? name,
-    aliases: [],
-    bindables: [],
-    properties: []
-  } as any;
+  return { name, key: key ?? name, aliases: [], bindables: [], properties: [] };
 }
 
 function ai(element: IControllerInfo | null, attrs: IControllerInfo[] = []): AureliaInfo {
-  return {
-    customElementInfo: element as any,
-    customAttributesInfo: attrs as any
-  };
+  return { customElementInfo: element, customAttributesInfo: attrs };
 }
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('SidebarApp', () => {
   let app: any;
-  let debugHost: any;
-  let plat: any;
+  let debugHost: ReturnType<typeof stubSidebarDebugHost>;
 
-  beforeEach(async () => {
-    ChromeTest.reset();
-    jest.resetModules();
-
-    const mod = await import('@/sidebar/sidebar-app');
-    SidebarAppClass = mod.SidebarApp;
-
-    app = Object.create(SidebarAppClass.prototype);
-
-    app.isDarkTheme = false;
-    app.aureliaDetected = false;
-    app.aureliaVersion = null;
-    app.detectionState = 'checking';
-    app.extensionInvalidated = false;
-    app.selectedElement = null;
-    app.selectedElementAttributes = [];
-    app.selectedNodeType = 'custom-element';
-    app.selectedElementTagName = null;
-    app.isShowingBindingContext = false;
-    app.isElementPickerActive = false;
-    app.followChromeSelection = true;
-    app.searchQuery = '';
-    app.searchResults = [];
-    app.isSearchOpen = false;
-    app.expandedSections = {
-      bindables: true,
-      properties: true,
-      context: true,
-      controller: false,
-      attributes: false,
-      lifecycle: false,
-      computed: false,
-      dependencies: false,
-      route: false,
-      slots: false,
-      expression: false,
-      timeline: false,
-      template: false,
-    };
-    app.componentTree = [];
-    app.expandedTreeNodes = new Set();
-    app.selectedTreeNodeKey = null;
-    app.isTreePanelExpanded = true;
-    app.treeRevision = 0;
-    app.isRecording = false;
-    app.timelineEvents = [];
-    app.expandedTimelineEvents = new Set();
-    app.templateSnapshot = null;
-    app.expandedBindings = new Set();
-    app.expandedControllers = new Set();
-    app.lifecycleHooks = null;
-    app.computedProperties = [];
-    app.dependencies = null;
-    app.routeInfo = null;
-    app.slotInfo = null;
-    app.expressionInput = '';
-    app.expressionResult = '';
-    app.expressionResultType = '';
-    app.expressionError = '';
-    app.expressionHistory = [];
-    app.copiedPropertyId = null;
-    app.propertyRowsRevision = 0;
-
+  beforeEach(() => {
+    localStorage.clear();
+    document.documentElement.className = '';
     debugHost = stubSidebarDebugHost();
-    plat = stubPlatform();
+    app = DI.createContainer().get(SidebarApp);
+    app.debugHost = debugHost;
+  });
 
-    (app as any).debugHost = debugHost;
-    (app as any).plat = plat;
+  describe('lifecycle', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('attaching wires the host, restores preferences and starts polling', async () => {
+      localStorage.setItem('au-devtools.followChromeSelection', 'false');
+      localStorage.setItem('au-devtools.sections', JSON.stringify({ bindables: false, bogus: true }));
+
+      app.attaching();
+
+      expect(debugHost.attach).toHaveBeenCalledWith(app);
+      expect(app.followChromeSelection).toBe(false);
+      expect(app.expandedSections.bindables).toBe(false);
+      expect(app.expandedSections.bogus).toBeUndefined();
+      expect(debugHost.onRuntimeMessage).toHaveBeenCalledTimes(3);
+      expect(debugHost.getComponentTree).toHaveBeenCalled();
+
+      jest.advanceTimersByTime(2000);
+      expect(debugHost.getDetectionState).toHaveBeenCalledTimes(2);
+    });
+
+    it('applies the DevTools theme to the document root', () => {
+      debugHost.getThemeName.mockReturnValue('dark');
+      app.attaching();
+      expect(document.documentElement.classList.contains('dark')).toBe(true);
+
+      debugHost.getThemeName.mockReturnValue('default');
+      app.attaching();
+      expect(document.documentElement.classList.contains('dark')).toBe(false);
+      expect(document.documentElement.classList.contains('light')).toBe(true);
+    });
+
+    it('leaves theme classes alone outside DevTools so the media query decides', () => {
+      debugHost.getThemeName.mockReturnValue(null);
+      app.attaching();
+      expect(document.documentElement.className).toBe('');
+    });
+
+    it('detaching removes subscriptions, timers and the host binding', () => {
+      const unsubscribe = jest.fn();
+      debugHost.onRuntimeMessage.mockReturnValue(unsubscribe);
+      app.attaching();
+
+      app.detaching();
+      jest.advanceTimersByTime(5000);
+
+      expect(unsubscribe).toHaveBeenCalledTimes(3);
+      expect(debugHost.detach).toHaveBeenCalled();
+      expect(debugHost.getDetectionState).toHaveBeenCalledTimes(1);
+    });
+
+    it('routes runtime messages to the matching handlers', () => {
+      const handlers: Record<string, (message: any) => void> = {};
+      debugHost.onRuntimeMessage.mockImplementation((type: string, handler: any) => {
+        handlers[type] = handler;
+        return jest.fn();
+      });
+      app.attaching();
+      app.isRecording = true;
+
+      handlers['au-devtools:interaction']({ entry: { id: 'e1' } });
+      expect(app.timelineEvents).toEqual([{ id: 'e1' }]);
+
+      handlers['au-devtools:tree-change']({});
+      expect(debugHost.getComponentTree).toHaveBeenCalledTimes(2);
+
+      const bindable = { name: 'count', value: 0, type: 'number' };
+      app.selectedElement = { ...ci('c', 'k'), bindables: [bindable] };
+      handlers['au-devtools:property-change']({
+        changes: [{ componentKey: 'k', propertyName: 'count', newValue: 3 }],
+        snapshot: { componentKey: 'k' },
+      });
+      expect(bindable.value).toBe(3);
+    });
+
+    it('stops polling once the extension runtime is gone', () => {
+      app.attaching();
+      debugHost.isRuntimeAvailable.mockReturnValue(false);
+
+      jest.advanceTimersByTime(2000);
+      jest.advanceTimersByTime(2000);
+
+      expect(app.extensionInvalidated).toBe(true);
+      expect(debugHost.getDetectionState).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('detection', () => {
+    it('maps the page state into the view', async () => {
+      debugHost.getDetectionState.mockResolvedValue({ state: 'detected', version: 1 });
+      await app.refreshDetectionState();
+      expect(app.detectionState).toBe('detected');
+      expect(app.aureliaVersion).toBe(1);
+      expect(app.versionLabel).toBe('Aurelia 1');
+
+      debugHost.getDetectionState.mockResolvedValue({ state: 'disabled', version: null });
+      await app.refreshDetectionState();
+      expect(app.detectionState).toBe('disabled');
+      expect(app.aureliaVersion).toBeNull();
+
+      debugHost.getDetectionState.mockResolvedValue({ state: 'not-found', version: null });
+      await app.refreshDetectionState();
+      expect(app.detectionState).toBe('not-found');
+
+      debugHost.getDetectionState.mockResolvedValue({ state: null, version: null });
+      await app.refreshDetectionState();
+      expect(app.detectionState).toBe('checking');
+    });
+
+    it('ignores a missing snapshot', async () => {
+      app.detectionState = 'detected';
+      debugHost.getDetectionState.mockResolvedValue(null);
+      await app.refreshDetectionState();
+      expect(app.detectionState).toBe('detected');
+    });
+
+    it('loads the tree and syncs selection when Aurelia appears', async () => {
+      app.detectionState = 'checking';
+      await app.refreshDetectionState();
+      expect(debugHost.getComponentTree).toHaveBeenCalledTimes(1);
+      expect(debugHost.refreshSelection).toHaveBeenCalledTimes(1);
+
+      await app.refreshDetectionState();
+      expect(debugHost.getComponentTree).toHaveBeenCalledTimes(1);
+    });
+
+    it('exposes one state flag at a time', () => {
+      app.detectionState = 'checking';
+      expect(app.isChecking).toBe(true);
+      expect(app.isDetected).toBe(false);
+      app.detectionState = 'not-found';
+      expect(app.isNotFound).toBe(true);
+      app.detectionState = 'disabled';
+      expect(app.isDisabled).toBe(true);
+      app.detectionState = 'detected';
+      expect(app.isDetected).toBe(true);
+      app.extensionInvalidated = true;
+      expect(app.isDetected).toBe(false);
+    });
+
+    it('checkExtensionInvalidated reflects the runtime', () => {
+      expect(app.checkExtensionInvalidated()).toBe(false);
+      debugHost.isRuntimeAvailable.mockReturnValue(false);
+      expect(app.checkExtensionInvalidated()).toBe(true);
+      expect(app.extensionInvalidated).toBe(true);
+    });
   });
 
   describe('onElementPicked', () => {
-    it('sets selectedElement for custom element', () => {
+    it('selects a custom element and its attributes', () => {
       const element = ci('my-component', 'my-key');
-      element.bindables = [{ name: 'value', value: 1, type: 'number' }] as any;
-      element.properties = [{ name: 'count', value: 5, type: 'number' }] as any;
+      const attr = ci('tooltip', 'tooltip-key');
 
-      app.onElementPicked(ai(element));
+      app.onElementPicked(ai(element, [attr]));
 
       expect(app.selectedElement).toBe(element);
       expect(app.selectedNodeType).toBe('custom-element');
-      expect(app.selectedElementAttributes).toEqual([]);
+      expect(app.selectedKindLabel).toBe('custom element');
+      expect(app.selectedElementAttributes).toEqual([attr]);
+      expect(app.selectedTreeNodeKey).toBe('my-key');
     });
 
-    it('sets selectedElement for custom attribute when no element', () => {
+    it('falls back to the first custom attribute', () => {
       const attr = ci('my-attr', 'attr-key');
-
       app.onElementPicked(ai(null, [attr]));
-
       expect(app.selectedElement).toBe(attr);
       expect(app.selectedNodeType).toBe('custom-attribute');
+      expect(app.selectedKindLabel).toBe('custom attribute');
     });
 
-    it('clears selection when no component info', () => {
+    it('fills in missing collections so the template can bind to them', () => {
+      const element = { name: 'x', key: 'x', aliases: [] } as unknown as IControllerInfo;
+      app.onElementPicked(ai(element));
+      expect(app.selectedElement.bindables).toEqual([]);
+      expect(app.selectedElement.properties).toEqual([]);
+      expect(app.selectedElement.overrideContext).toEqual([]);
+    });
+
+    it('clears selection when nothing was picked', () => {
       app.selectedElement = ci('existing');
+      app.onElementPicked(null);
+      expect(app.selectedElement).toBeNull();
+      expect(debugHost.stopPropertyWatching).toHaveBeenCalled();
+    });
 
-      app.onElementPicked(null as any);
-
+    it('clears selection when the payload is empty', () => {
+      app.selectedElement = ci('existing');
+      app.onElementPicked(ai(null, []));
       expect(app.selectedElement).toBeNull();
     });
 
-    it('tracks binding context info', () => {
-      const element = ci('parent-component');
-      const info = {
-        ...ai(element),
-        __selectedElement: 'div',
-        __isBindingContext: true
-      };
-
-      app.onElementPicked(info);
-
+    it('records the binding context origin', () => {
+      app.onElementPicked({ ...ai(ci('parent')), __selectedElement: 'div', __isBindingContext: true });
       expect(app.selectedElementTagName).toBe('div');
       expect(app.isShowingBindingContext).toBe(true);
     });
 
-    it('starts property watching when element selected', () => {
-      const element = ci('my-component', 'component-key');
-
-      app.onElementPicked(ai(element));
-
-      expect(debugHost.startPropertyWatching).toHaveBeenCalledWith({
-        componentKey: 'component-key',
-        pollInterval: 500
-      });
+    it('stops the picker and watches the selected component', () => {
+      app.isElementPickerActive = true;
+      app.onElementPicked(ai(ci('my-component', 'component-key')));
+      expect(app.isElementPickerActive).toBe(false);
+      expect(debugHost.stopElementPicker).toHaveBeenCalled();
+      expect(debugHost.startPropertyWatching).toHaveBeenCalledWith({ componentKey: 'component-key', pollInterval: 500 });
     });
 
-    it('filters out duplicate attributes with same key as element', () => {
-      const element = ci('my-element', 'my-key');
-      const dupAttr = ci('my-element', 'my-key');
-      const realAttr = ci('other-attr', 'other-key');
+    it('prefers the instance id as the component key', () => {
+      app.onElementPicked(ai({ ...ci('c', 'def-key'), instanceId: 'aui-3' }));
+      expect(app.selectedComponentKey).toBe('aui-3');
+    });
 
-      app.onElementPicked(ai(element, [dupAttr, realAttr]));
-
-      expect(app.selectedElementAttributes).toHaveLength(2);
+    it('loads the tree when it is still empty', () => {
+      app.onElementPicked(ai(ci('c')));
+      expect(debugHost.getComponentTree).toHaveBeenCalled();
     });
   });
 
   describe('clearSelection', () => {
-    it('stops property watching and clears all selection state', () => {
+    it('resets everything derived from the selection', () => {
       app.selectedElement = ci('test');
       app.selectedElementAttributes = [ci('attr')];
       app.selectedElementTagName = 'div';
       app.isShowingBindingContext = true;
+      app.lifecycleHooks = { version: 2, hooks: [] };
 
       app.clearSelection();
 
@@ -203,933 +289,533 @@ describe('SidebarApp', () => {
       expect(app.selectedElementAttributes).toEqual([]);
       expect(app.selectedElementTagName).toBeNull();
       expect(app.isShowingBindingContext).toBe(false);
-    });
-  });
-
-  describe('toggleSection', () => {
-    it('toggles section expanded state', () => {
-      expect(app.expandedSections.bindables).toBe(true);
-
-      app.toggleSection('bindables');
-
-      expect(app.expandedSections.bindables).toBe(false);
-
-      app.toggleSection('bindables');
-
-      expect(app.expandedSections.bindables).toBe(true);
-    });
-  });
-
-  describe('toggleElementPicker', () => {
-    it('starts picker when activating', () => {
-      app.isElementPickerActive = false;
-
-      app.toggleElementPicker();
-
-      expect(app.isElementPickerActive).toBe(true);
-      expect(debugHost.startElementPicker).toHaveBeenCalled();
-    });
-
-    it('stops picker when deactivating', () => {
-      app.isElementPickerActive = true;
-
-      app.toggleElementPicker();
-
-      expect(app.isElementPickerActive).toBe(false);
-      expect(debugHost.stopElementPicker).toHaveBeenCalled();
-    });
-  });
-
-  describe('toggleFollowChromeSelection', () => {
-    it('toggles follow state', () => {
-      app.followChromeSelection = true;
-
-      app.toggleFollowChromeSelection();
-
-      expect(app.followChromeSelection).toBe(false);
-    });
-  });
-
-  describe('search', () => {
-    it('handleSearchInput opens search with results', async () => {
-      debugHost.searchComponents.mockResolvedValue([
-        { key: 'comp-1', name: 'my-component', type: 'custom-element' }
-      ]);
-
-      const event = { target: { value: 'my' } } as any;
-      app.handleSearchInput(event);
-
-      expect(app.searchQuery).toBe('my');
-      expect(app.isSearchOpen).toBe(true);
-    });
-
-    it('handleSearchInput clears results when query empty', () => {
-      app.searchResults = [{ key: '1', name: 'test', type: 'custom-element' }];
-      app.isSearchOpen = true;
-
-      const event = { target: { value: '' } } as any;
-      app.handleSearchInput(event);
-
-      expect(app.searchResults).toEqual([]);
-      expect(app.isSearchOpen).toBe(false);
-    });
-
-    it('selectSearchResult calls debugHost and clears search', () => {
-      const result = { key: 'comp-key', name: 'my-comp', type: 'custom-element' as const };
-      app.searchQuery = 'my';
-      app.isSearchOpen = true;
-
-      app.selectSearchResult(result);
-
-      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('comp-key');
-      expect(app.searchQuery).toBe('');
-      expect(app.isSearchOpen).toBe(false);
-    });
-
-    it('clearSearch resets search state', () => {
-      app.searchQuery = 'test';
-      app.searchResults = [{ key: '1', name: 'test', type: 'custom-element' }];
-      app.isSearchOpen = true;
-
-      app.clearSearch();
-
-      expect(app.searchQuery).toBe('');
-      expect(app.searchResults).toEqual([]);
-      expect(app.isSearchOpen).toBe(false);
-    });
-  });
-
-  describe('property editing', () => {
-    beforeEach(() => {
-      jest.useFakeTimers();
-    });
-
-    afterEach(() => {
-      jest.useRealTimers();
-    });
-
-    it('editProperty sets isEditing and stores original value', () => {
-      const prop: any = { name: 'test', value: 'original', type: 'string' };
-
-      app.editProperty(prop);
-
-      expect(prop.isEditing).toBe(true);
-      expect(prop.originalValue).toBe('original');
-    });
-
-    it('saveProperty converts number and calls updateValues', () => {
-      const prop: any = { name: 'count', value: 1, type: 'number', isEditing: true };
-      app.selectedElement = { bindables: [], properties: [prop] };
-
-      app.saveProperty(prop, '42');
-      jest.runOnlyPendingTimers();
-
-      expect(prop.value).toBe(42);
-      expect(prop.isEditing).toBe(false);
-      expect(debugHost.updateValues).toHaveBeenCalled();
-    });
-
-    it('saveProperty reverts on invalid number', () => {
-      const prop: any = { name: 'count', value: 5, type: 'number', isEditing: true, originalValue: 5 };
-      app.selectedElement = { bindables: [], properties: [prop] };
-
-      app.saveProperty(prop, 'not-a-number');
-
-      expect(prop.value).toBe(5);
-      expect(prop.isEditing).toBe(false);
-    });
-
-    it('saveProperty converts boolean true', () => {
-      const prop: any = { name: 'active', value: false, type: 'boolean', isEditing: true };
-      app.selectedElement = { bindables: [], properties: [prop] };
-
-      app.saveProperty(prop, 'true');
-      jest.runOnlyPendingTimers();
-
-      expect(prop.value).toBe(true);
-    });
-
-    it('saveProperty converts boolean false', () => {
-      const prop: any = { name: 'active', value: true, type: 'boolean', isEditing: true };
-      app.selectedElement = { bindables: [], properties: [prop] };
-
-      app.saveProperty(prop, 'false');
-      jest.runOnlyPendingTimers();
-
-      expect(prop.value).toBe(false);
-    });
-
-    it('saveProperty reverts on invalid boolean', () => {
-      const prop: any = { name: 'active', value: true, type: 'boolean', isEditing: true, originalValue: true };
-      app.selectedElement = { bindables: [], properties: [prop] };
-
-      app.saveProperty(prop, 'invalid');
-
-      expect(prop.value).toBe(true);
-    });
-
-    it('cancelPropertyEdit reverts property', () => {
-      const prop: any = { name: 'test', value: 'new', type: 'string', isEditing: true, originalValue: 'original' };
-
-      app.cancelPropertyEdit(prop);
-
-      expect(prop.value).toBe('original');
-      expect(prop.isEditing).toBe(false);
-    });
-  });
-
-  describe('property expansion', () => {
-    it('togglePropertyExpansion does nothing when canExpand is false', () => {
-      const prop: any = { canExpand: false, isExpanded: false };
-
-      app.togglePropertyExpansion(prop);
-
-      expect(prop.isExpanded).toBe(false);
-    });
-
-    it('togglePropertyExpansion expands when already has expandedValue', () => {
-      const prop: any = { canExpand: true, isExpanded: false, expandedValue: { properties: [] } };
-
-      app.togglePropertyExpansion(prop);
-
-      expect(prop.isExpanded).toBe(true);
-    });
-
-    it('togglePropertyExpansion collapses when expanded', () => {
-      const prop: any = { canExpand: true, isExpanded: true };
-
-      app.togglePropertyExpansion(prop);
-
-      expect(prop.isExpanded).toBe(false);
+      expect(app.lifecycleHooks).toBeNull();
     });
   });
 
   describe('onPropertyChanges', () => {
-    it('updates bindable values', () => {
-      const bindable: any = { name: 'count', value: 0, type: 'number' };
-      app.selectedElement = {
-        key: 'test-key',
-        name: 'test',
-        bindables: [bindable],
-        properties: [],
-      };
+    it('updates bindables and properties of the selected component', () => {
+      const bindable = { name: 'count', value: 0, type: 'number' };
+      const property = { name: 'message', value: 'old', type: 'string' };
+      app.selectedElement = { ...ci('test', 'test-key'), bindables: [bindable], properties: [property] };
 
-      const changes = [{
-        componentKey: 'test-key',
-        propertyName: 'count',
-        propertyType: 'bindable',
-        oldValue: 0,
-        newValue: 5,
-        timestamp: Date.now(),
-      }];
-
-      const snapshot = {
-        componentKey: 'test-key',
-        bindables: [{ name: 'count', value: 5, type: 'number' }],
-        properties: [],
-        timestamp: Date.now(),
-      };
-
-      app.onPropertyChanges(changes, snapshot);
+      app.onPropertyChanges(
+        [
+          { componentKey: 'test-key', propertyName: 'count', propertyType: 'bindable', oldValue: 0, newValue: 5, timestamp: 1 },
+          { componentKey: 'test-key', propertyName: 'message', propertyType: 'property', oldValue: 'old', newValue: 'new', timestamp: 1 },
+        ],
+        { componentKey: 'test-key', bindables: [], properties: [], timestamp: 1 }
+      );
 
       expect(bindable.value).toBe(5);
-    });
-
-    it('updates property values', () => {
-      const property: any = { name: 'message', value: 'old', type: 'string' };
-      app.selectedElement = {
-        key: 'test-key',
-        name: 'test',
-        bindables: [],
-        properties: [property],
-      };
-
-      const changes = [{
-        componentKey: 'test-key',
-        propertyName: 'message',
-        propertyType: 'property',
-        oldValue: 'old',
-        newValue: 'new',
-        timestamp: Date.now(),
-      }];
-
-      const snapshot = {
-        componentKey: 'test-key',
-        bindables: [],
-        properties: [{ name: 'message', value: 'new', type: 'string' }],
-        timestamp: Date.now(),
-      };
-
-      app.onPropertyChanges(changes, snapshot);
-
       expect(property.value).toBe('new');
     });
 
-    it('ignores changes for different component', () => {
-      const property: any = { name: 'message', value: 'original', type: 'string' };
-      app.selectedElement = {
-        key: 'selected-key',
-        name: 'selected',
-        bindables: [],
-        properties: [property],
-      };
+    it('ignores changes for another component or without selection', () => {
+      const property = { name: 'message', value: 'original', type: 'string' };
+      app.selectedElement = { ...ci('selected', 'selected-key'), properties: [property] };
 
-      const changes = [{
-        componentKey: 'different-key',
-        propertyName: 'message',
-        propertyType: 'property',
-        oldValue: 'old',
-        newValue: 'new',
-        timestamp: Date.now(),
-      }];
-
-      const snapshot = {
-        componentKey: 'different-key',
-        bindables: [],
-        properties: [],
-        timestamp: Date.now(),
-      };
-
-      app.onPropertyChanges(changes, snapshot);
-
+      app.onPropertyChanges(
+        [{ componentKey: 'other', propertyName: 'message', propertyType: 'property', oldValue: 'a', newValue: 'b', timestamp: 1 }],
+        { componentKey: 'other', bindables: [], properties: [], timestamp: 1 }
+      );
       expect(property.value).toBe('original');
-    });
 
-    it('does nothing when no selected element', () => {
       app.selectedElement = null;
-
-      const changes = [{
-        componentKey: 'any-key',
-        propertyName: 'prop',
-        propertyType: 'property',
-        oldValue: 'old',
-        newValue: 'new',
-        timestamp: Date.now(),
-      }];
-
-      expect(() => app.onPropertyChanges(changes, {})).not.toThrow();
+      expect(() => app.onPropertyChanges([{ propertyName: 'x' }] as any, {} as any)).not.toThrow();
     });
   });
 
-  describe('computed getters', () => {
-    it('hasBindables returns true when bindables exist', () => {
-      app.selectedElement = { bindables: [{ name: 'test' }], properties: [] };
+  describe('sections and toolbar', () => {
+    it('toggleSection flips and persists the state', () => {
+      app.toggleSection('bindables');
+      expect(app.expandedSections.bindables).toBe(false);
+      expect(JSON.parse(localStorage.getItem('au-devtools.sections')!).bindables).toBe(false);
+      app.toggleSection('bindables');
+      expect(app.expandedSections.bindables).toBe(true);
+    });
+
+    it('toggleElementPicker starts and stops the page picker', () => {
+      app.toggleElementPicker();
+      expect(app.isElementPickerActive).toBe(true);
+      expect(debugHost.startElementPicker).toHaveBeenCalled();
+      app.toggleElementPicker();
+      expect(app.isElementPickerActive).toBe(false);
+      expect(debugHost.stopElementPicker).toHaveBeenCalled();
+    });
+
+    it('toggleFollowChromeSelection persists and resyncs when enabled', () => {
+      app.toggleFollowChromeSelection();
+      expect(app.followChromeSelection).toBe(false);
+      expect(localStorage.getItem('au-devtools.followChromeSelection')).toBe('false');
+      expect(debugHost.refreshSelection).not.toHaveBeenCalled();
+
+      app.toggleFollowChromeSelection();
+      expect(app.followChromeSelection).toBe(true);
+      expect(debugHost.refreshSelection).toHaveBeenCalled();
+    });
+  });
+
+  describe('search', () => {
+    it('runs a search from input and opens the dropdown', async () => {
+      debugHost.searchComponents.mockResolvedValue([{ key: 'comp-1', name: 'my-component', type: 'custom-element' }]);
+
+      app.onSearchInput({ target: { value: 'My' } } as any);
+      await flush();
+
+      expect(debugHost.searchComponents).toHaveBeenCalledWith('my');
+      expect(app.isSearchOpen).toBe(true);
+      expect(app.activeSearchIndex).toBe(0);
+      expect(app.isActiveSearchResult(0)).toBe(true);
+    });
+
+    it('drops stale results from an earlier query', async () => {
+      let resolveFirst: (v: any) => void = () => {};
+      debugHost.searchComponents
+        .mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)))
+        .mockResolvedValueOnce([{ key: 'b', name: 'b', type: 'custom-element' }]);
+
+      app.onSearchInput({ target: { value: 'a' } } as any);
+      app.onSearchInput({ target: { value: 'b' } } as any);
+      await flush();
+      resolveFirst([{ key: 'a', name: 'a', type: 'custom-element' }]);
+      await flush();
+
+      expect(app.searchResults.map((r: any) => r.key)).toEqual(['b']);
+    });
+
+    it('clears results when the query is emptied', () => {
+      app.searchResults = [{ key: '1', name: 'test', type: 'custom-element' }];
+      app.isSearchOpen = true;
+      app.onSearchInput({ target: { value: '' } } as any);
+      expect(app.searchResults).toEqual([]);
+      expect(app.isSearchOpen).toBe(false);
+      expect(app.activeSearchIndex).toBe(-1);
+    });
+
+    it('supports keyboard navigation and selection', () => {
+      app.searchQuery = 'x';
+      app.searchResults = [
+        { key: 'a', name: 'a', type: 'custom-element' },
+        { key: 'b', name: 'b', type: 'custom-element' },
+      ];
+      app.activeSearchIndex = 0;
+      const key = (k: string) => ({ key: k, preventDefault: jest.fn() }) as any;
+
+      app.onSearchKeydown(key('ArrowDown'));
+      expect(app.activeSearchIndex).toBe(1);
+      expect(app.isSearchOpen).toBe(true);
+      app.onSearchKeydown(key('ArrowDown'));
+      expect(app.activeSearchIndex).toBe(0);
+      app.onSearchKeydown(key('ArrowUp'));
+      expect(app.activeSearchIndex).toBe(1);
+
+      app.onSearchKeydown(key('Enter'));
+      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('b');
+      expect(app.searchQuery).toBe('');
+      expect(app.isSearchOpen).toBe(false);
+    });
+
+    it('Escape clears the search', () => {
+      app.searchQuery = 'x';
+      app.searchResults = [{ key: 'a', name: 'a', type: 'custom-element' }];
+      app.isSearchOpen = true;
+      app.onSearchKeydown({ key: 'Escape', preventDefault: jest.fn() } as any);
+      expect(app.searchQuery).toBe('');
+      expect(app.searchResults).toEqual([]);
+    });
+
+    it('selectSearchResult prevents the input from losing focus first', () => {
+      const event = { preventDefault: jest.fn() } as any;
+      app.selectSearchResult({ key: 'comp-key', name: 'my-comp', type: 'custom-element' }, event);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('comp-key');
+    });
+
+    it('openSearch only reopens when there is something to show', () => {
+      app.openSearch();
+      expect(app.isSearchOpen).toBe(false);
+      app.searchQuery = 'a';
+      app.searchResults = [{ key: 'a', name: 'a', type: 'custom-element' }];
+      app.openSearch();
+      expect(app.isSearchOpen).toBe(true);
+      app.closeSearch();
+      expect(app.isSearchOpen).toBe(false);
+    });
+
+    it('setActiveSearchIndex updates the highlighted row', () => {
+      app.setActiveSearchIndex(2);
+      expect(app.activeSearchIndex).toBe(2);
+    });
+  });
+
+  describe('component tree', () => {
+    const tree = () => [
+      { key: 'app', name: 'app', tagName: 'app', type: 'custom-element', hasChildren: true, childCount: 1, children: [
+        { key: 'child', name: 'child', tagName: 'child', type: 'custom-element', hasChildren: false, childCount: 0 },
+      ] },
+      { key: 'footer', name: 'footer', tagName: 'footer', type: 'custom-attribute', hasChildren: false, childCount: 0 },
+    ];
+
+    it('loadComponentTree stores the tree and tolerates failures', async () => {
+      debugHost.getComponentTree.mockResolvedValue(tree());
+      await app.loadComponentTree();
+      expect(app.componentTree).toHaveLength(2);
+      expect(app.hasComponentTree).toBe(true);
+      expect(app.componentTreeCount).toBe(3);
+
+      debugHost.getComponentTree.mockRejectedValue(new Error('boom'));
+      await app.loadComponentTree();
+      expect(app.componentTree).toEqual([]);
+      expect(app.hasComponentTree).toBe(false);
+    });
+
+    it('treeRows follows expansion state', () => {
+      app.componentTree = tree();
+      expect(app.treeRows.map((r: any) => r.node.key)).toEqual(['app', 'footer']);
+
+      app.toggleTreeNode(app.componentTree[0]);
+      expect(app.treeRows.map((r: any) => `${r.node.key}@${r.depth}`)).toEqual(['app@0', 'child@1', 'footer@0']);
+      expect(app.isTreeNodeExpanded(app.componentTree[0])).toBe(true);
+
+      app.toggleTreeNode(app.componentTree[0]);
+      expect(app.treeRows).toHaveLength(2);
+    });
+
+    it('toggleTreeNode ignores leaves and stops propagation', () => {
+      const event = { stopPropagation: jest.fn() } as any;
+      app.toggleTreeNode({ key: 'leaf', hasChildren: false }, event);
+      expect(event.stopPropagation).toHaveBeenCalled();
+      expect(app.isTreeNodeExpanded({ key: 'leaf' })).toBe(false);
+    });
+
+    it('selectTreeNode selects through the host', () => {
+      app.selectTreeNode({ key: 'my-component', name: 'MyComponent' });
+      expect(app.selectedTreeNodeKey).toBe('my-component');
+      expect(app.isTreeNodeSelected({ key: 'my-component' })).toBe(true);
+      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('my-component');
+    });
+
+    it('supports keyboard interaction on tree rows', () => {
+      const node = { key: 'app', name: 'app', hasChildren: true };
+      const key = (k: string) => ({ key: k, preventDefault: jest.fn() }) as any;
+
+      app.onTreeKeydown(key('ArrowRight'), node);
+      expect(app.expandedTreeKeys.app).toBe(true);
+      app.onTreeKeydown(key('ArrowLeft'), node);
+      expect(app.expandedTreeKeys.app).toBe(false);
+      app.onTreeKeydown(key('Enter'), node);
+      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('app');
+      app.onTreeKeydown(key(' '), node);
+      expect(debugHost.selectComponentByKey).toHaveBeenCalledTimes(2);
+    });
+
+    it('toggleTreePanel flips the panel', () => {
+      app.toggleTreePanel();
+      expect(app.isTreePanelExpanded).toBe(false);
+    });
+  });
+
+  describe('timeline', () => {
+    it('start and stop recording talk to the page', async () => {
+      await app.startRecording();
+      expect(app.isRecording).toBe(true);
+      expect(debugHost.startInteractionRecording).toHaveBeenCalled();
+      await app.stopRecording();
+      expect(app.isRecording).toBe(false);
+      expect(debugHost.stopInteractionRecording).toHaveBeenCalled();
+    });
+
+    it('onInteraction only records while recording and caps the log', () => {
+      app.onInteraction({ id: 'ignored' });
+      expect(app.timelineEvents).toEqual([]);
+
+      app.isRecording = true;
+      for (let i = 0; i < 205; i++) app.onInteraction({ id: `e${i}` });
+      expect(app.timelineEvents).toHaveLength(200);
+      expect(app.timelineEvents[0].id).toBe('e5');
+      expect(app.timelineEventCount).toBe(200);
+      expect(app.hasTimelineEvents).toBe(true);
+    });
+
+    it('clearTimeline resets events and the page log', () => {
+      app.timelineEvents = [{ id: 'evt-1' }];
+      app.expandedTimelineIds['evt-1'] = true;
+      app.clearTimeline();
+      expect(app.timelineEvents).toEqual([]);
+      expect(app.expandedTimelineIds).toEqual({});
+      expect(debugHost.clearInteractionLog).toHaveBeenCalled();
+    });
+
+    it('canClearTimeline is true while recording or with events', () => {
+      expect(app.canClearTimeline).toBe(false);
+      app.isRecording = true;
+      expect(app.canClearTimeline).toBe(true);
+    });
+
+    it('toggles event expansion', () => {
+      const event = { id: 'evt-1', eventName: 'click' };
+      app.toggleTimelineEvent(event);
+      expect(app.isTimelineEventExpanded(event)).toBe(true);
+      app.toggleTimelineEvent(event);
+      expect(app.isTimelineEventExpanded(event)).toBe(false);
+    });
+
+    it('selectTimelineComponent selects the target component without toggling the row', () => {
+      const domEvent = { stopPropagation: jest.fn() } as any;
+      app.selectTimelineComponent({ id: 'evt-1', target: { componentKey: 'my-component' } }, domEvent);
+      expect(domEvent.stopPropagation).toHaveBeenCalled();
+      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('my-component');
+
+      app.selectTimelineComponent({ id: 'evt-2', target: null });
+      expect(debugHost.selectComponentByKey).toHaveBeenCalledTimes(1);
+    });
+
+    it('formats timestamps and classifies events by mode', () => {
+      expect(app.formatTimelineTimestamp(new Date('2024-01-15T10:30:45.123Z').getTime())).toMatch(/\.123$/);
+      expect(app.timelineEventClass({ mode: 'navigation' })).toBe('mode-navigation');
+      expect(app.timelineEventClass({})).toBe('mode-unknown');
+    });
+
+    it('snapshotRows formats before/after entries', () => {
+      expect(app.snapshotRows({ a: 1, b: 'x' })).toEqual([
+        { key: 'a', value: '1' },
+        { key: 'b', value: '"x"' },
+      ]);
+      expect(app.snapshotRows(null)).toEqual([]);
+    });
+  });
+
+  describe('enhanced info', () => {
+    it('loads every snapshot for the selected component', async () => {
+      debugHost.getLifecycleHooks.mockResolvedValue({ version: 2, hooks: [{ name: 'attached', implemented: true, isAsync: false }] });
+      debugHost.getComputedProperties.mockResolvedValue([{ name: 'fullName', hasGetter: true }]);
+      debugHost.getEnhancedDISnapshot.mockResolvedValue({ version: 2, dependencies: [{ name: 'A' }], containerHierarchy: { current: { id: 1 }, ancestors: [{ id: 0, isRoot: true }] }, availableServices: [{ name: 'S' }] });
+      debugHost.getRouteInfo.mockResolvedValue({ currentRoute: '/users', params: [] });
+      debugHost.getSlotInfo.mockResolvedValue({ slots: [{ name: 'default', hasContent: true }, { name: 'x', hasContent: false }] });
+      debugHost.getTemplateSnapshot.mockResolvedValue({ bindings: [], controllers: [], hasSlots: true, shadowMode: 'none', isContainerless: false });
+      app.selectedElement = ci('c', 'key');
+
+      await app.loadEnhancedInfo();
+
+      expect(app.hasLifecycleHooks).toBe(true);
+      expect(app.implementedHooksCount).toBe(1);
+      expect(app.totalHooksCount).toBe(1);
+      expect(app.hasComputedProperties).toBe(true);
+      expect(app.isEnhancedDI).toBe(true);
+      expect(app.hasEnhancedDependencies).toBe(true);
+      expect(app.hasContainerHierarchy).toBe(true);
+      expect(app.availableServicesCount).toBe(1);
+      expect(app.hasAnyDIInfo).toBe(true);
+      expect(app.containerAncestorsReversed).toEqual([{ id: 0, isRoot: true }]);
+      expect(app.currentContainerLabel).toBe('current');
+      expect(app.hasRouteInfo).toBe(true);
+      expect(app.hasSlots).toBe(true);
+      expect(app.activeSlotCount).toBe(1);
+      expect(app.hasTemplateMeta).toBe(true);
+      expect(app.hasTemplateInfo).toBe(false);
+    });
+
+    it('treats a v1 snapshot as plain dependencies', async () => {
+      debugHost.getEnhancedDISnapshot.mockResolvedValue({ dependencies: [{ name: 'HttpClient' }], containerDepth: 1 });
+      app.selectedElement = ci('c', 'key');
+      await app.loadEnhancedInfo();
+      expect(app.isEnhancedDI).toBe(false);
+      expect(app.hasDependencies).toBe(true);
+    });
+
+    it('discards results that arrive after the selection changed', async () => {
+      let resolveHooks: (v: any) => void = () => {};
+      debugHost.getLifecycleHooks.mockReturnValue(new Promise((resolve) => (resolveHooks = resolve)));
+      app.selectedElement = ci('first', 'first');
+      const pending = app.loadEnhancedInfo();
+      app.selectedElement = ci('second', 'second');
+      resolveHooks({ version: 2, hooks: [{ name: 'attached', implemented: true }] });
+      await pending;
+      expect(app.lifecycleHooks).toBeNull();
+    });
+
+    it('clears on failure or without selection', async () => {
+      app.lifecycleHooks = { version: 2, hooks: [] };
+      await app.loadEnhancedInfo();
+      expect(app.lifecycleHooks).toBeNull();
+
+      app.selectedElement = ci('c', 'key');
+      debugHost.getLifecycleHooks.mockRejectedValue(new Error('nope'));
+      app.lifecycleHooks = { version: 2, hooks: [] };
+      await app.loadEnhancedInfo();
+      expect(app.lifecycleHooks).toBeNull();
+    });
+
+    it('computes has* getters from the selection', () => {
+      app.selectedElement = { ...ci('c'), bindables: [{ name: 'a' }], properties: [], overrideContext: [{ name: 'x' }], controller: { properties: [{ name: 'p' }] } };
       expect(app.hasBindables).toBe(true);
-    });
-
-    it('hasBindables returns false when no bindables', () => {
-      app.selectedElement = { bindables: [], properties: [] };
-      expect(app.hasBindables).toBe(false);
-    });
-
-    it('hasProperties returns true when properties exist', () => {
-      app.selectedElement = { bindables: [], properties: [{ name: 'test' }] };
-      expect(app.hasProperties).toBe(true);
-    });
-
-    it('hasCustomAttributes returns true when attributes exist', () => {
-      app.selectedElementAttributes = [ci('test-attr')];
+      expect(app.hasProperties).toBe(false);
+      expect(app.hasOverrideContext).toBe(true);
+      expect(app.hasController).toBe(true);
+      app.selectedElementAttributes = [ci('attr')];
       expect(app.hasCustomAttributes).toBe(true);
     });
 
-    it('hasLifecycleHooks returns true when hooks exist', () => {
-      app.lifecycleHooks = { hooks: [{ name: 'attached', implemented: true }] };
-      expect(app.hasLifecycleHooks).toBe(true);
+    it('toggleAvailableServices and previewRows', () => {
+      app.toggleAvailableServices();
+      expect(app.showAvailableServices).toBe(true);
+      expect(app.previewRows({ a: 1 })).toEqual([{ key: 'a', value: '1' }]);
+      expect(app.previewRows(undefined)).toEqual([]);
     });
+  });
 
-    it('implementedHooksCount counts implemented hooks', () => {
-      app.lifecycleHooks = {
-        hooks: [
-          { name: 'attached', implemented: true },
-          { name: 'detached', implemented: false },
-          { name: 'bound', implemented: true },
-        ]
+  describe('template debugger', () => {
+    it('reads bindings and controllers from the snapshot', () => {
+      expect(app.templateBindings).toEqual([]);
+      expect(app.templateControllers).toEqual([]);
+      app.templateSnapshot = {
+        bindings: [{ id: 'b1', type: 'property', expression: 'foo', target: 'bar', value: 1, valueType: 'number', isBound: true }],
+        controllers: [{ id: 'c1', type: 'if', isActive: true }],
       };
-      expect(app.implementedHooksCount).toBe(2);
+      expect(app.hasTemplateInfo).toBe(true);
+      expect(app.templateBindingsCount).toBe(1);
+      expect(app.templateControllersCount).toBe(1);
     });
 
-    it('totalHooksCount returns all hooks', () => {
-      app.lifecycleHooks = { hooks: [{ name: 'a' }, { name: 'b' }, { name: 'c' }] };
-      expect(app.totalHooksCount).toBe(3);
+    it('toggles binding and controller details', () => {
+      const binding = { id: 'b1' };
+      app.toggleBindingExpand(binding);
+      expect(app.isBindingExpanded(binding)).toBe(true);
+      app.toggleBindingExpand(binding);
+      expect(app.isBindingExpanded(binding)).toBe(false);
+
+      const controller = { id: 'c1' };
+      app.toggleControllerExpand(controller);
+      expect(app.isControllerExpanded(controller)).toBe(true);
     });
 
-    it('activeSlotCount counts slots with content', () => {
-      app.slotInfo = {
-        slots: [
-          { name: 'default', hasContent: true },
-          { name: 'header', hasContent: false },
-          { name: 'footer', hasContent: true },
-        ]
-      };
-      expect(app.activeSlotCount).toBe(2);
+    it('labels binding types and modes', () => {
+      expect(app.bindingTypeLabel('property')).toBe('prop');
+      expect(app.bindingTypeLabel('listener')).toBe('event');
+      expect(app.bindingTypeLabel('custom')).toBe('custom');
+      expect(app.bindingModeLabel('oneTime')).toBe('one-time');
+      expect(app.bindingModeLabel('toView')).toBe('→');
+      expect(app.bindingModeLabel('fromView')).toBe('←');
+      expect(app.bindingModeLabel('twoWay')).toBe('↔');
+      expect(app.bindingModeLabel(undefined)).toBe('→');
+      expect(app.bindingModeClass('twoWay')).toBe('mode-two-way');
+      expect(app.bindingModeClass('bogus')).toBe('mode-default');
     });
 
-    it('hasRouteInfo returns true when currentRoute exists', () => {
-      app.routeInfo = { currentRoute: '/users' };
-      expect(app.hasRouteInfo).toBe(true);
-    });
-
-    it('hasSlots returns true when slots exist', () => {
-      app.slotInfo = { slots: [{ name: 'default' }] };
-      expect(app.hasSlots).toBe(true);
-    });
-
-    it('hasComputedProperties returns true when computed exist', () => {
-      app.computedProperties = [{ name: 'fullName', hasGetter: true }];
-      expect(app.hasComputedProperties).toBe(true);
-    });
-
-    it('hasDependencies returns true when dependencies exist', () => {
-      app.dependencies = { dependencies: [{ name: 'HttpClient' }] };
-      expect(app.hasDependencies).toBe(true);
-    });
-  });
-
-  describe('formatPropertyValue', () => {
-    it('formats null', () => {
-      expect(app.formatPropertyValue(null)).toBe('null');
-    });
-
-    it('formats undefined', () => {
-      expect(app.formatPropertyValue(undefined)).toBe('undefined');
-    });
-
-    it('formats string with quotes', () => {
-      expect(app.formatPropertyValue('hello')).toBe('"hello"');
-    });
-
-    it('formats array with length', () => {
-      expect(app.formatPropertyValue([1, 2, 3])).toBe('Array(3)');
-    });
-
-    it('formats object as {...}', () => {
-      expect(app.formatPropertyValue({ a: 1 })).toBe('{...}');
-    });
-
-    it('formats number as string', () => {
-      expect(app.formatPropertyValue(42)).toBe('42');
-    });
-
-    it('formats boolean as string', () => {
-      expect(app.formatPropertyValue(true)).toBe('true');
-    });
-  });
-
-  describe('getPropertyTypeClass', () => {
-    it('returns type-string for string', () => {
-      expect(app.getPropertyTypeClass('string')).toBe('type-string');
-    });
-
-    it('returns type-number for number', () => {
-      expect(app.getPropertyTypeClass('number')).toBe('type-number');
-    });
-
-    it('returns type-boolean for boolean', () => {
-      expect(app.getPropertyTypeClass('boolean')).toBe('type-boolean');
-    });
-
-    it('returns type-null for null', () => {
-      expect(app.getPropertyTypeClass('null')).toBe('type-null');
-    });
-
-    it('returns type-object for object', () => {
-      expect(app.getPropertyTypeClass('object')).toBe('type-object');
-    });
-
-    it('returns type-function for function', () => {
-      expect(app.getPropertyTypeClass('function')).toBe('type-function');
-    });
-
-    it('returns type-default for unknown', () => {
-      expect(app.getPropertyTypeClass('unknown')).toBe('type-default');
-    });
-  });
-
-  describe('getPropertyRows', () => {
-    it('returns empty array for undefined properties', () => {
-      expect(app.getPropertyRows(undefined)).toEqual([]);
-    });
-
-    it('returns empty array for empty properties', () => {
-      expect(app.getPropertyRows([])).toEqual([]);
-    });
-
-    it('flattens properties with depth', () => {
-      const props = [
-        { name: 'a', value: 1 },
-        { name: 'b', value: 2 },
-      ];
-
-      const rows = app.getPropertyRows(props);
-
-      expect(rows).toHaveLength(2);
-      expect(rows[0].depth).toBe(0);
-      expect(rows[1].depth).toBe(0);
-    });
-
-    it('includes expanded nested properties', () => {
-      const props = [
-        {
-          name: 'obj',
-          value: {},
-          isExpanded: true,
-          expandedValue: {
-            properties: [
-              { name: 'nested', value: 'inner' }
-            ]
-          }
-        }
-      ];
-
-      const rows = app.getPropertyRows(props);
-
-      expect(rows).toHaveLength(2);
-      expect(rows[0].property.name).toBe('obj');
-      expect(rows[0].depth).toBe(0);
-      expect(rows[1].property.name).toBe('nested');
-      expect(rows[1].depth).toBe(1);
+    it('formats values and classifies controllers', () => {
+      expect(app.formatBindingValue({ a: 1 })).toBe('{"a":1}');
+      expect(app.isConditionalController({ type: 'else' })).toBe(true);
+      expect(app.isConditionalController({ type: 'repeat' })).toBe(false);
+      expect(app.hasRepeatItems({ type: 'repeat', items: [{}] })).toBe(true);
+      expect(app.hasRepeatItems({ type: 'repeat', items: [] })).toBe(false);
     });
   });
 
   describe('expression evaluation', () => {
-    it('selectHistoryExpression sets expressionInput', () => {
-      app.selectHistoryExpression('this.count');
-      expect(app.expressionInput).toBe('this.count');
+    it('evaluates in the selected component and records history', async () => {
+      app.selectedElement = ci('c', 'key');
+      app.expressionInput = ' this.count ';
+      expect(app.canEvaluate).toBe(true);
+
+      await app.evaluateExpression();
+
+      expect(debugHost.evaluateExpression).toHaveBeenCalledWith('key', 'this.count');
+      expect(app.expressionResult).toBe('1');
+      expect(app.expressionResultType).toBe('number');
+      expect(app.expressionHistory).toEqual(['this.count']);
     });
 
-    it('clearExpressionResult clears all result state', () => {
-      app.expressionResult = 'some result';
-      app.expressionResultType = 'string';
-      app.expressionError = 'some error';
+    it('reports errors and missing selection', async () => {
+      app.expressionInput = 'x';
+      await app.evaluateExpression();
+      expect(app.expressionError).toBe('No component selected');
 
-      app.clearExpressionResult();
-
+      app.selectedElement = ci('c', 'key');
+      debugHost.evaluateExpression.mockResolvedValue({ success: false, error: 'bad' });
+      await app.evaluateExpression();
+      expect(app.expressionError).toBe('bad');
       expect(app.expressionResult).toBe('');
-      expect(app.expressionResultType).toBe('');
+    });
+
+    it('caps history and avoids duplicates', async () => {
+      app.selectedElement = ci('c', 'key');
+      for (let i = 0; i < 12; i++) {
+        app.expressionInput = `e${i}`;
+        await app.evaluateExpression();
+      }
+      app.expressionInput = 'e11';
+      await app.evaluateExpression();
+      expect(app.expressionHistory).toHaveLength(10);
+      expect(app.expressionHistory[0]).toBe('e11');
+    });
+
+    it('Enter triggers evaluation from the input', () => {
+      const spy = jest.spyOn(app, 'evaluateExpression').mockResolvedValue(undefined);
+      app.onExpressionKeydown({ key: 'Enter', preventDefault: jest.fn() } as any);
+      app.onExpressionKeydown({ key: 'a', preventDefault: jest.fn() } as any);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('history selection and clearing', () => {
+      app.selectHistoryExpression('this.count');
+      expect(app.expressionInput).toBe('this.count');
+      app.expressionResult = 'r';
+      app.expressionError = 'e';
+      app.clearExpressionResult();
+      expect(app.expressionResult).toBe('');
       expect(app.expressionError).toBe('');
     });
   });
 
-  describe('revealInElements', () => {
-    it('calls debugHost with component info', () => {
+  describe('export and reveal', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('copies the component as JSON', async () => {
+      const writeText = jest.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+      app.selectedElement = { ...ci('comp', 'key'), bindables: [{ name: 'a', value: 1, type: 'number' }] };
+      app.selectedElementAttributes = [{ ...ci('attr'), bindables: [{ name: 'b', value: 'x', type: 'string' }] }];
+
+      await app.exportComponentAsJson();
+
+      const payload = JSON.parse(writeText.mock.calls[0][0]);
+      expect(payload.meta.name).toBe('comp');
+      expect(payload.bindables).toEqual({ a: { value: 1, type: 'number' } });
+      expect(payload.customAttributes[0].bindables).toEqual({ b: { value: 'x', type: 'string' } });
+      expect(app.isExportCopied).toBe(true);
+      jest.advanceTimersByTime(1500);
+      expect(app.isExportCopied).toBe(false);
+    });
+
+    it('does nothing without a selection or when the clipboard fails', async () => {
+      await app.exportComponentAsJson();
+      Object.assign(navigator, { clipboard: { writeText: jest.fn().mockRejectedValue(new Error('x')) } });
+      app.selectedElement = ci('comp');
+      await app.exportComponentAsJson();
+      expect(app.isExportCopied).toBe(false);
+    });
+
+    it('reveals the selected element or attribute', () => {
       app.selectedElement = ci('my-component', 'my-key');
-      app.selectedNodeType = 'custom-element';
-      app.selectedElementAttributes = [];
-
       app.revealInElements();
-
       expect(debugHost.revealInElements).toHaveBeenCalledWith({
         name: 'my-component',
         type: 'custom-element',
         customElementInfo: app.selectedElement,
         customAttributesInfo: [],
       });
-    });
 
-    it('does nothing when no selectedElement', () => {
-      app.selectedElement = null;
-
+      app.selectedNodeType = 'custom-attribute';
       app.revealInElements();
-
-      expect(debugHost.revealInElements).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('checkExtensionInvalidated', () => {
-    it('returns false when chrome.runtime.id exists', () => {
-      expect(app.checkExtensionInvalidated()).toBe(false);
-      expect(app.extensionInvalidated).toBe(false);
-    });
-
-    it('returns true and sets flag when chrome.runtime.id missing', () => {
-      const originalId = (global as any).chrome.runtime.id;
-      delete (global as any).chrome.runtime.id;
-
-      expect(app.checkExtensionInvalidated()).toBe(true);
-      expect(app.extensionInvalidated).toBe(true);
-
-      (global as any).chrome.runtime.id = originalId;
-    });
-  });
-
-  describe('component tree', () => {
-    it('loadComponentTree populates componentTree from debugHost', async () => {
-      const mockTree = [
-        { key: 'app', name: 'App', tagName: 'app', type: 'custom-element', hasChildren: true, childCount: 1 },
-        { key: 'header', name: 'Header', tagName: 'header', type: 'custom-element', hasChildren: false, childCount: 0 },
-      ];
-      debugHost.getComponentTree.mockResolvedValue(mockTree);
-
-      await app.loadComponentTree();
-
-      expect(app.componentTree).toEqual(mockTree);
-      expect(app.treeRevision).toBe(1);
-    });
-
-    it('loadComponentTree handles errors gracefully', async () => {
-      debugHost.getComponentTree.mockRejectedValue(new Error('Network error'));
-
-      await app.loadComponentTree();
-
-      expect(app.componentTree).toEqual([]);
-    });
-
-    it('toggleTreePanel toggles isTreePanelExpanded', () => {
-      expect(app.isTreePanelExpanded).toBe(true);
-
-      app.toggleTreePanel();
-      expect(app.isTreePanelExpanded).toBe(false);
-
-      app.toggleTreePanel();
-      expect(app.isTreePanelExpanded).toBe(true);
-    });
-
-    it('toggleTreeNode expands node with children', () => {
-      const node = { key: 'app', name: 'App', hasChildren: true };
-
-      app.toggleTreeNode(node);
-
-      expect(app.expandedTreeNodes.has('app')).toBe(true);
-      expect(app.treeRevision).toBe(1);
-    });
-
-    it('toggleTreeNode collapses already expanded node', () => {
-      const node = { key: 'app', name: 'App', hasChildren: true };
-      app.expandedTreeNodes.add('app');
-
-      app.toggleTreeNode(node);
-
-      expect(app.expandedTreeNodes.has('app')).toBe(false);
-    });
-
-    it('toggleTreeNode does nothing for node without children', () => {
-      const node = { key: 'leaf', name: 'Leaf', hasChildren: false };
-
-      app.toggleTreeNode(node);
-
-      expect(app.expandedTreeNodes.has('leaf')).toBe(false);
-    });
-
-    it('selectTreeNode updates selection and calls debugHost', () => {
-      const node = { key: 'my-component', name: 'MyComponent' };
-
-      app.selectTreeNode(node);
-
-      expect(app.selectedTreeNodeKey).toBe('my-component');
-      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('my-component');
-    });
-
-    it('getTreeRows returns empty for empty tree', () => {
-      app.componentTree = [];
-      expect(app.getTreeRows()).toEqual([]);
-    });
-
-    it('getTreeRows flattens tree with depth', () => {
-      app.componentTree = [
-        { key: 'app', name: 'App', hasChildren: true, children: [
-          { key: 'child', name: 'Child', hasChildren: false }
-        ]}
-      ];
-      app.expandedTreeNodes.add('app');
-
-      const rows = app.getTreeRows();
-
-      expect(rows).toHaveLength(2);
-      expect(rows[0].node.key).toBe('app');
-      expect(rows[0].depth).toBe(0);
-      expect(rows[1].node.key).toBe('child');
-      expect(rows[1].depth).toBe(1);
-    });
-
-    it('getTreeRows excludes collapsed children', () => {
-      app.componentTree = [
-        { key: 'app', name: 'App', hasChildren: true, children: [
-          { key: 'child', name: 'Child', hasChildren: false }
-        ]}
-      ];
-
-      const rows = app.getTreeRows();
-
-      expect(rows).toHaveLength(1);
-      expect(rows[0].node.key).toBe('app');
-    });
-
-    it('isTreeNodeExpanded returns correct state', () => {
-      const node = { key: 'test' };
-      expect(app.isTreeNodeExpanded(node)).toBe(false);
-
-      app.expandedTreeNodes.add('test');
-      expect(app.isTreeNodeExpanded(node)).toBe(true);
-    });
-
-    it('isTreeNodeSelected returns correct state', () => {
-      const node = { key: 'test' };
-      expect(app.isTreeNodeSelected(node)).toBe(false);
-
-      app.selectedTreeNodeKey = 'test';
-      expect(app.isTreeNodeSelected(node)).toBe(true);
-    });
-
-    it('hasComponentTree returns true when tree has nodes', () => {
-      app.componentTree = [];
-      expect(app.hasComponentTree).toBe(false);
-
-      app.componentTree = [{ key: 'app', name: 'App' }];
-      expect(app.hasComponentTree).toBe(true);
-    });
-
-    it('componentTreeCount counts all nodes including nested', () => {
-      app.componentTree = [
-        { key: 'app', name: 'App', children: [
-          { key: 'child1', name: 'Child1' },
-          { key: 'child2', name: 'Child2', children: [
-            { key: 'grandchild', name: 'GrandChild' }
-          ]}
-        ]},
-        { key: 'footer', name: 'Footer' }
-      ];
-
-      expect(app.componentTreeCount).toBe(5);
-    });
-  });
-
-  describe('timeline / interaction recorder', () => {
-    it('startRecording sets isRecording and calls debugHost', async () => {
-      await app.startRecording();
-
-      expect(app.isRecording).toBe(true);
-      expect(debugHost.startInteractionRecording).toHaveBeenCalled();
-    });
-
-    it('stopRecording clears isRecording and calls debugHost', async () => {
-      app.isRecording = true;
-
-      await app.stopRecording();
-
-      expect(app.isRecording).toBe(false);
-      expect(debugHost.stopInteractionRecording).toHaveBeenCalled();
-    });
-
-    it('clearTimeline clears events and calls debugHost', () => {
-      app.timelineEvents = [{ id: 'evt-1' }, { id: 'evt-2' }] as any;
-      app.expandedTimelineEvents.add('evt-1');
-
-      app.clearTimeline();
-
-      expect(app.timelineEvents).toEqual([]);
-      expect(app.expandedTimelineEvents.size).toBe(0);
-      expect(debugHost.clearInteractionLog).toHaveBeenCalled();
-    });
-
-    it('toggleTimelineEvent expands event', () => {
-      const event = { id: 'evt-1', eventName: 'click' } as any;
-      app.timelineEvents = [event];
-
-      app.toggleTimelineEvent(event);
-
-      expect(app.expandedTimelineEvents.has('evt-1')).toBe(true);
-    });
-
-    it('toggleTimelineEvent collapses already expanded event', () => {
-      const event = { id: 'evt-1', eventName: 'click' } as any;
-      app.timelineEvents = [event];
-      app.expandedTimelineEvents.add('evt-1');
-
-      app.toggleTimelineEvent(event);
-
-      expect(app.expandedTimelineEvents.has('evt-1')).toBe(false);
-    });
-
-    it('isTimelineEventExpanded returns correct state', () => {
-      const event = { id: 'evt-1' } as any;
-
-      expect(app.isTimelineEventExpanded(event)).toBe(false);
-
-      app.expandedTimelineEvents.add('evt-1');
-      expect(app.isTimelineEventExpanded(event)).toBe(true);
-    });
-
-    it('selectTimelineComponent calls debugHost when target has componentKey', () => {
-      const event = { id: 'evt-1', target: { componentKey: 'my-component' } } as any;
-
-      app.selectTimelineComponent(event);
-
-      expect(debugHost.selectComponentByKey).toHaveBeenCalledWith('my-component');
-    });
-
-    it('selectTimelineComponent does nothing when no target componentKey', () => {
-      const event = { id: 'evt-1', target: null } as any;
-
-      app.selectTimelineComponent(event);
-
-      expect(debugHost.selectComponentByKey).not.toHaveBeenCalled();
-    });
-
-    it('hasTimelineEvents returns true when events exist', () => {
-      app.timelineEvents = [];
-      expect(app.hasTimelineEvents).toBe(false);
-
-      app.timelineEvents = [{ id: 'evt-1' }] as any;
-      expect(app.hasTimelineEvents).toBe(true);
-    });
-
-    it('timelineEventCount returns event count', () => {
-      app.timelineEvents = [{ id: '1' }, { id: '2' }, { id: '3' }] as any;
-      expect(app.timelineEventCount).toBe(3);
-    });
-
-    it('formatTimelineTimestamp formats timestamp with milliseconds', () => {
-      const timestamp = new Date('2024-01-15T10:30:45.123Z').getTime();
-      const result = app.formatTimelineTimestamp(timestamp);
-
-      expect(result).toMatch(/\d{2}:\d{2}:\d{2}\.\d{3}/);
-    });
-
-    it('getTimelineEventTypeClass returns correct class for event types', () => {
-      expect(app.getTimelineEventTypeClass('property-change')).toBe('event-property');
-      expect(app.getTimelineEventTypeClass('lifecycle')).toBe('event-lifecycle');
-      expect(app.getTimelineEventTypeClass('interaction')).toBe('event-interaction');
-      expect(app.getTimelineEventTypeClass('binding')).toBe('event-binding');
-      expect(app.getTimelineEventTypeClass('unknown')).toBe('event-default');
-    });
-  });
-
-  describe('template debugger', () => {
-    it('hasTemplateInfo returns false when no snapshot', () => {
-      app.templateSnapshot = null;
-      expect(app.hasTemplateInfo).toBe(false);
-    });
-
-    it('hasTemplateInfo returns false when snapshot has no bindings or controllers', () => {
-      app.templateSnapshot = {
-        componentKey: 'test',
-        componentName: 'test',
-        bindings: [],
-        controllers: [],
-        instructions: [],
-        hasSlots: false,
-        shadowMode: 'none',
-        isContainerless: false,
-      };
-      expect(app.hasTemplateInfo).toBe(false);
-    });
-
-    it('hasTemplateInfo returns true when snapshot has bindings', () => {
-      app.templateSnapshot = {
-        componentKey: 'test',
-        componentName: 'test',
-        bindings: [{ id: 'b1', type: 'property', expression: 'foo', target: 'bar', value: 1, valueType: 'number', isBound: true }],
-        controllers: [],
-        instructions: [],
-        hasSlots: false,
-        shadowMode: 'none',
-        isContainerless: false,
-      } as any;
-      expect(app.hasTemplateInfo).toBe(true);
-    });
-
-    it('templateBindings returns empty array when no snapshot', () => {
-      app.templateSnapshot = null;
-      expect(app.templateBindings).toEqual([]);
-    });
-
-    it('templateBindings returns bindings from snapshot', () => {
-      const bindings = [{ id: 'b1', type: 'property', expression: 'foo' }];
-      app.templateSnapshot = { bindings } as any;
-      expect(app.templateBindings).toEqual(bindings);
-    });
-
-    it('templateControllers returns empty array when no snapshot', () => {
-      app.templateSnapshot = null;
-      expect(app.templateControllers).toEqual([]);
-    });
-
-    it('templateControllers returns controllers from snapshot', () => {
-      const controllers = [{ id: 'c1', type: 'if', isActive: true }];
-      app.templateSnapshot = { controllers } as any;
-      expect(app.templateControllers).toEqual(controllers);
-    });
-
-    it('toggleBindingExpand adds binding to expandedBindings', () => {
-      app.templateSnapshot = { bindings: [], controllers: [] } as any;
-      const binding = { id: 'b1' } as any;
-
-      app.toggleBindingExpand(binding);
-
-      expect(app.expandedBindings.has('b1')).toBe(true);
-    });
-
-    it('toggleBindingExpand removes binding from expandedBindings', () => {
-      app.templateSnapshot = { bindings: [], controllers: [] } as any;
-      app.expandedBindings.add('b1');
-      const binding = { id: 'b1' } as any;
-
-      app.toggleBindingExpand(binding);
-
-      expect(app.expandedBindings.has('b1')).toBe(false);
-    });
-
-    it('isBindingExpanded returns correct state', () => {
-      const binding = { id: 'b1' } as any;
-
-      expect(app.isBindingExpanded(binding)).toBe(false);
-
-      app.expandedBindings.add('b1');
-      expect(app.isBindingExpanded(binding)).toBe(true);
-    });
-
-    it('toggleControllerExpand adds controller to expandedControllers', () => {
-      app.templateSnapshot = { bindings: [], controllers: [] } as any;
-      const controller = { id: 'c1' } as any;
-
-      app.toggleControllerExpand(controller);
-
-      expect(app.expandedControllers.has('c1')).toBe(true);
-    });
-
-    it('isControllerExpanded returns correct state', () => {
-      const controller = { id: 'c1' } as any;
-
-      expect(app.isControllerExpanded(controller)).toBe(false);
-
-      app.expandedControllers.add('c1');
-      expect(app.isControllerExpanded(controller)).toBe(true);
-    });
-
-    it('getBindingTypeIcon returns correct icons', () => {
-      expect(app.getBindingTypeIcon('property')).toBe('&#8594;');
-      expect(app.getBindingTypeIcon('listener')).toBe('&#9889;');
-      expect(app.getBindingTypeIcon('interpolation')).toBe('&#36;{}');
-      expect(app.getBindingTypeIcon('unknown')).toBe('&#8226;');
-    });
-
-    it('getBindingModeClass returns correct classes', () => {
-      expect(app.getBindingModeClass('oneTime')).toBe('mode-one-time');
-      expect(app.getBindingModeClass('toView')).toBe('mode-to-view');
-      expect(app.getBindingModeClass('fromView')).toBe('mode-from-view');
-      expect(app.getBindingModeClass('twoWay')).toBe('mode-two-way');
-      expect(app.getBindingModeClass('default')).toBe('mode-default');
-    });
-
-    it('getBindingModeLabel returns correct labels', () => {
-      expect(app.getBindingModeLabel('oneTime')).toBe('one-time');
-      expect(app.getBindingModeLabel('toView')).toBe('→');
-      expect(app.getBindingModeLabel('fromView')).toBe('←');
-      expect(app.getBindingModeLabel('twoWay')).toBe('↔');
-    });
-
-    it('getControllerTypeIcon returns correct icons', () => {
-      expect(app.getControllerTypeIcon('if')).toBe('&#10067;');
-      expect(app.getControllerTypeIcon('repeat')).toBe('&#8635;');
-      expect(app.getControllerTypeIcon('unknown')).toBe('&#9670;');
-    });
-
-    it('formatBindingValue formats values correctly', () => {
-      expect(app.formatBindingValue(undefined)).toBe('undefined');
-      expect(app.formatBindingValue(null)).toBe('null');
-      expect(app.formatBindingValue('hello')).toBe('"hello"');
-      expect(app.formatBindingValue(42)).toBe('42');
-      expect(app.formatBindingValue({ a: 1 })).toBe('{"a":1}');
+      expect(debugHost.revealInElements).toHaveBeenLastCalledWith(
+        expect.objectContaining({ customElementInfo: null, customAttributesInfo: [app.selectedElement] })
+      );
+
+      app.selectedElement = null;
+      app.revealInElements();
+      expect(debugHost.revealInElements).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -1,0 +1,45 @@
+<div class="property-list">
+  <div repeat.for="row of rows"
+       class="property-row ${row.property.isEditing ? 'editing' : ''}"
+       style="padding-left: ${row.depth * 12}px">
+    <button if.bind="row.property.canExpand"
+            type="button"
+            class="disclosure ${row.property.isExpanded ? 'open' : ''}"
+            aria-label="Toggle ${row.property.name}"
+            aria-expanded="${row.property.isExpanded ? 'true' : 'false'}"
+            click.trigger="toggleExpand(row.property)"></button>
+    <span else class="disclosure-spacer"></span>
+
+    <span class="property-name">${row.property.name}</span>
+    <span class="property-colon">:</span>
+
+    <input if.bind="row.property.isEditing"
+           type="text"
+           class="property-editor"
+           aria-label="Edit ${row.property.name}"
+           value.one-time="editorText(row.property)"
+           focus.bind="true"
+           focus.trigger="onEditorFocus($event)"
+           keydown.trigger="onEditorKeydown($event, row.property)"
+           blur.trigger="commitEdit(row.property, $event.target.value)">
+    <span else
+          class="property-value ${typeClass(row.property.type)} ${row.editable ? 'editable' : ''}"
+          title="${row.editable ? 'Double-click to edit' : ''}"
+          dblclick.trigger="beginEdit(row.property)">${displayValue(row.property.value, row.property.type)}</span>
+
+    <button if.bind="copyable"
+            type="button"
+            class="row-action ${copiedProperty === row.property ? 'copied' : ''}"
+            title="${copiedProperty === row.property ? 'Copied' : 'Copy value'}"
+            aria-label="Copy ${row.property.name}"
+            click.trigger="copyValue(row.property, $event)">
+      <svg if.bind="copiedProperty !== row.property" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+        <rect x="1.5" y="1.5" width="6" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M4.5 3.5h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      </svg>
+      <svg else viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+        <path d="M2 6.5l2.5 2.5L10 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+</div>

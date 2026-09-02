@@ -15,11 +15,28 @@ import {
 } from '../shared/types';
 import { SidebarApp } from './sidebar-app';
 
-interface SearchResult {
+export interface SearchResult {
   key: string;
   name: string;
   type: 'custom-element' | 'custom-attribute';
 }
+
+export interface DetectionSnapshot {
+  state: 'checking' | 'detected' | 'not-found' | 'disabled' | null;
+  version: number | null;
+}
+
+export interface ExpressionEvaluation {
+  success: boolean;
+  value?: unknown;
+  type?: string;
+  error?: string;
+}
+
+type RuntimeMessage = { type?: string } & Record<string, any>;
+type RuntimeMessageHandler = (message: RuntimeMessage) => void;
+
+const INITIAL_SELECTION_DELAY_MS = 500;
 
 export class SidebarDebugHost {
   consumer: SidebarApp | null = null;
@@ -28,25 +45,139 @@ export class SidebarDebugHost {
   private lastPropertySnapshot: PropertySnapshot | null = null;
   private watchingComponentKey: string | null = null;
   private useEventDrivenWatching = false;
+  private selectionListener: (() => void) | null = null;
+  private initialSelectionTimer: ReturnType<typeof setTimeout> | null = null;
 
   attach(consumer: SidebarApp) {
     this.consumer = consumer;
 
-    if (chrome?.devtools) {
-      // Listen for element selection changes in the Elements panel
-      chrome.devtools.panels.elements.onSelectionChanged.addListener(() => {
-        if (this.consumer && this.consumer.followChromeSelection) {
-          this.getSelectedElementInfo();
-        }
-      });
+    if (!chrome?.devtools) return;
 
-      // Get initial selection
-      setTimeout(() => {
-        if (this.consumer?.followChromeSelection) {
-          this.getSelectedElementInfo();
-        }
-      }, 500);
+    this.selectionListener = () => {
+      if (this.consumer?.followChromeSelection) {
+        this.getSelectedElementInfo();
+      }
+    };
+    chrome.devtools.panels.elements.onSelectionChanged.addListener(this.selectionListener);
+
+    this.initialSelectionTimer = setTimeout(() => {
+      this.initialSelectionTimer = null;
+      if (this.consumer?.followChromeSelection) {
+        this.getSelectedElementInfo();
+      }
+    }, INITIAL_SELECTION_DELAY_MS);
+  }
+
+  detach() {
+    if (this.selectionListener && chrome?.devtools?.panels?.elements?.onSelectionChanged?.removeListener) {
+      chrome.devtools.panels.elements.onSelectionChanged.removeListener(this.selectionListener);
     }
+    this.selectionListener = null;
+    if (this.initialSelectionTimer) {
+      clearTimeout(this.initialSelectionTimer);
+      this.initialSelectionTimer = null;
+    }
+    this.stopPickerPolling();
+    this.stopPropertyWatching();
+    this.consumer = null;
+  }
+
+  isRuntimeAvailable(): boolean {
+    try {
+      return !!chrome?.runtime?.id;
+    } catch {
+      return false;
+    }
+  }
+
+  getThemeName(): string | null {
+    try {
+      return (chrome?.devtools?.panels as { themeName?: string } | undefined)?.themeName ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  onRuntimeMessage(type: string, handler: RuntimeMessageHandler): () => void {
+    if (!chrome?.runtime?.onMessage?.addListener) return () => {};
+    const listener = (message: RuntimeMessage) => {
+      if (message?.type === type) handler(message);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => {
+      chrome?.runtime?.onMessage?.removeListener?.(listener);
+    };
+  }
+
+  refreshSelection(): void {
+    this.getSelectedElementInfo();
+  }
+
+  getDetectionState(): Promise<DetectionSnapshot | null> {
+    return this.evalExpression<DetectionSnapshot | null>(`({
+      state: window.__AURELIA_DEVTOOLS_DETECTION_STATE__ || null,
+      version: window.__AURELIA_DEVTOOLS_VERSION__ || null
+    })`, null);
+  }
+
+  getExpandedValue(debugId: number): Promise<IControllerInfo | null> {
+    return this.evalExpression<IControllerInfo | null>(
+      `window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__.getExpandedDebugValueForId(${JSON.stringify(debugId)})`,
+      null
+    );
+  }
+
+  evaluateExpression(componentKey: string, expression: string): Promise<ExpressionEvaluation> {
+    const code = `
+      (function() {
+        try {
+          const hook = window.__AURELIA_DEVTOOLS_GLOBAL_HOOK__;
+          if (!hook || typeof hook.evaluateInComponentContext !== 'function') {
+            return { success: false, error: 'DevTools hook not available' };
+          }
+          return hook.evaluateInComponentContext(${JSON.stringify(componentKey)}, ${JSON.stringify(expression)});
+        } catch (e) {
+          return { success: false, error: e && e.message ? e.message : String(e) };
+        }
+      })()
+    `;
+    return new Promise(resolve => {
+      if (!chrome?.devtools?.inspectedWindow) {
+        resolve({ success: false, error: 'DevTools not available' });
+        return;
+      }
+      chrome.devtools.inspectedWindow.eval<ExpressionEvaluation | null>(code, (result, exception) => {
+        if (exception && (exception.isException || exception.isError)) {
+          resolve({ success: false, error: exception.value || exception.description || 'Evaluation failed' });
+          return;
+        }
+        if (!result) {
+          resolve({ success: false, error: 'Unknown response format' });
+          return;
+        }
+        if (result.error && !result.success) {
+          resolve({ success: false, error: String(result.error) });
+          return;
+        }
+        resolve(result);
+      });
+    });
+  }
+
+  private evalExpression<T>(expression: string, fallback: T): Promise<T> {
+    return new Promise(resolve => {
+      if (!chrome?.devtools?.inspectedWindow) {
+        resolve(fallback);
+        return;
+      }
+      chrome.devtools.inspectedWindow.eval<T>(expression, (result, exception) => {
+        if (exception && (exception.isException || exception.isError)) {
+          resolve(fallback);
+          return;
+        }
+        resolve(result ?? fallback);
+      });
+    });
   }
 
   private getSelectedElementInfo() {

@@ -1,14 +1,7 @@
-import Aurelia, { DI, IPlatform, PLATFORM, Registration } from 'aurelia';
-import { StandardConfiguration } from '@aurelia/runtime-html';
+import Aurelia from 'aurelia';
 
 import './sidebar-app.css';
+import { PropertyList } from './components/property-list';
 import { SidebarApp } from './sidebar-app';
 
-const aurelia = new Aurelia(
-  DI.createContainer().register(
-    Registration.instance(IPlatform, PLATFORM),
-    StandardConfiguration
-  )
-).app(SidebarApp);
-
-aurelia.start();
+new Aurelia().register(PropertyList).app(SidebarApp).start();
