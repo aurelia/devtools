@@ -1,9 +1,9 @@
 # Aurelia DevTools
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-22.x-green.svg)](https://nodejs.org)
+[![Node.js Version](https://img.shields.io/badge/node-22%2B-green.svg)](https://nodejs.org)
 [![Chrome Extension](https://img.shields.io/badge/chrome-extension-blue.svg)](https://developer.chrome.com/docs/extensions/)
-[![TypeScript](https://img.shields.io/badge/typescript-5.7.x-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/typescript-6.0-blue.svg)](https://www.typescriptlang.org/)
 [![Aurelia](https://img.shields.io/badge/aurelia-v1%20%7C%20v2-purple.svg)](https://aurelia.io/)
 
 ## WIP
@@ -57,14 +57,16 @@ When present, the extension will skip installing hooks, ignore detection events,
 ## Development
 
 ### Prerequisites
-Install the latest Node.js and npm versions.
+Node.js 22.12 or newer and npm 10 or newer (see `.nvmrc`).
 
 ### Build Commands
 - `npm run start` - Development mode with file watching (Vite build --watch)
 - `npm run build` - Production build
 - `npm run analyze` - Production build with bundle analyzer (vite-bundle-analyzer)
-- `npm run lint` - Run ESLint and HTMLHint
-- `npm run test` - Run Jest tests with coverage
+- `npm run lint` - Run ESLint (zero warnings allowed), HTMLHint and the TypeScript typecheck
+- `npm run typecheck` - Run the TypeScript compiler without emitting
+- `npm run test` - Run Jest unit tests with coverage
+- `npm run test:e2e` - Build the extension and run the Playwright suite against the fixture app
 - `npm run reload` - Open Chrome extension reload URL
 
 ### Development Workflow
@@ -185,8 +187,11 @@ src/
 │   ├── main.ts             # Entry point
 │   ├── sidebar-app.ts      # Main ViewModel
 │   ├── sidebar-app.html    # Template
-│   ├── sidebar-app.css     # Styles
-│   └── sidebar-debug-host.ts # Communication layer
+│   ├── sidebar-app.css     # Design tokens and styles (matches Chrome DevTools)
+│   ├── sidebar-debug-host.ts # Communication layer with the inspected page
+│   ├── format.ts           # Value formatting helpers shared by the sidebar components
+│   └── components/         # Reusable sidebar components (property-list)
+├── hook/                   # Page-side hook evaluated inside the inspected page
 ├── background/             # Service worker
 ├── contentscript/          # Page content interaction
 ├── detector/               # Aurelia version detection
@@ -197,7 +202,7 @@ src/
 
 ## Technology Stack
 
-- **Frontend**: Aurelia 2, TypeScript, CSS
+- **Frontend**: Aurelia 2 (release candidate), TypeScript 6, plain CSS with custom properties
 - **Build**: Vite, Rollup
 - **Linting**: ESLint, HTMLHint
 - **Extension**: Chrome Extension Manifest v3

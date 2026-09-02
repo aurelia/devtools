@@ -1,0 +1,5 @@
+{
+  "attr-lowercase": ["viewBox", "preserveAspectRatio"],
+  "doctype-first": false,
+  "title-require": false
+}
