@@ -1,6 +1,10 @@
 // Page-side devtools hook. This entire module is injected into the inspected
 // page (world: MAIN) as a self-contained IIFE bundle; it must not reference
 // anything outside the page environment.
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function install(debugValueLookup: Record<number, any>) {
   const denyListProps = [
     "$controller",
@@ -138,7 +142,7 @@ export function install(debugValueLookup: Record<number, any>) {
         }
 
         return roots;
-      } catch (error) {
+      } catch {
         return [];
       }
     },
@@ -152,7 +156,7 @@ export function install(debugValueLookup: Record<number, any>) {
           try {
             instance[propertyName] = property.value;
             return true;
-          } catch (error) {
+          } catch {
             return false;
           }
         }
@@ -227,7 +231,7 @@ export function install(debugValueLookup: Record<number, any>) {
           element = element.parentElement;
           if (!traverse) break;
         }
-      } catch (e) {
+      } catch {
         // Silent error handling
       }
 
@@ -322,7 +326,7 @@ export function install(debugValueLookup: Record<number, any>) {
               return value;
             }));
             resultType = Array.isArray(result) ? 'array' : 'object';
-          } catch (e) {
+          } catch {
             serializedValue = String(result);
             resultType = 'object (non-serializable)';
           }
@@ -338,7 +342,7 @@ export function install(debugValueLookup: Record<number, any>) {
       } catch (e) {
         return {
           success: false,
-          error: e.message || String(e),
+          error: errorMessage(e),
         };
       }
     },
@@ -447,7 +451,7 @@ export function install(debugValueLookup: Record<number, any>) {
 
         return result;
       } catch (e) {
-        return { error: e.message };
+        return { error: errorMessage(e) };
       }
     },
 
@@ -639,7 +643,7 @@ export function install(debugValueLookup: Record<number, any>) {
         };
 
         return fullTree.flatMap(root => simplifyNode(root));
-      } catch (error) {
+      } catch {
         return [];
       }
     },
@@ -691,7 +695,7 @@ export function install(debugValueLookup: Record<number, any>) {
         this.__auDevtoolsRecording = true;
         try {
           return recordInteraction(this, event, originalCallSource);
-        } catch (err) {
+        } catch {
           return originalCallSource.call(this, event);
         } finally {
           this.__auDevtoolsRecording = false;
@@ -1237,7 +1241,7 @@ export function install(debugValueLookup: Record<number, any>) {
       const wrap = (methodName) => {
         const original = history[methodName];
         if (typeof original !== 'function') return;
-        history[methodName] = function(state, title, url) {
+        history[methodName] = function() {
           const result = original.apply(this, arguments);
           record(methodName);
           return result;
@@ -1670,7 +1674,7 @@ export function install(debugValueLookup: Record<number, any>) {
             value = viewModel[name];
             type = value === null ? 'null' : value === undefined ? 'undefined' : Array.isArray(value) ? 'array' : typeof value;
             value = formatPreview(value);
-          } catch (e) {
+          } catch {
             value = '[Error]';
             type = 'error';
           }
@@ -1867,54 +1871,6 @@ export function install(debugValueLookup: Record<number, any>) {
     return type;
   }
 
-  function serializeForDevtools(value, depth = 0, maxDepth = 2, seen = new WeakSet()) {
-    if (depth > maxDepth) return '[Max depth]';
-    if (value === null) return null;
-    if (value === undefined) return undefined;
-
-    const type = typeof value;
-
-    if (type === 'string' || type === 'number' || type === 'boolean') {
-      return value;
-    }
-
-    if (type === 'function') {
-      return '[Function: ' + (value.name || 'anonymous') + ']';
-    }
-
-    if (type === 'object') {
-      if (seen.has(value)) return '[Circular]';
-      seen.add(value);
-
-      if (Array.isArray(value)) {
-        if (value.length > 10) {
-          return '[Array(' + value.length + ')]';
-        }
-        return value.slice(0, 10).map(function(v) {
-          return serializeForDevtools(v, depth + 1, maxDepth, seen);
-        });
-      }
-
-      if (value.constructor && value.constructor.name !== 'Object') {
-        const className = value.constructor.name;
-        const preview = { __type__: className };
-        const keys = Object.keys(value).slice(0, 5);
-        keys.forEach(function(k) {
-          preview[k] = serializeForDevtools(value[k], depth + 1, maxDepth, seen);
-        });
-        return preview;
-      }
-
-      const result = {};
-      const keys = Object.keys(value).slice(0, 10);
-      keys.forEach(function(k) {
-        result[k] = serializeForDevtools(value[k], depth + 1, maxDepth, seen);
-      });
-      return result;
-    }
-
-    return String(value);
-  }
 
   function getInstancePreview(instance, maxProps) {
     if (!instance || typeof instance !== 'object') return null;
@@ -2189,7 +2145,6 @@ export function install(debugValueLookup: Record<number, any>) {
 
     try {
       const version = detectControllerVersion(controller);
-      const viewModel = controller.viewModel || controller.bindingContext || controller;
       const componentKey = controller.definition?.key || controller.definition?.name ||
                           controller.behavior?.elementName || controller.behavior?.attributeName || 'unknown';
       const componentName = controller.definition?.name ||
@@ -3068,7 +3023,7 @@ export function install(debugValueLookup: Record<number, any>) {
         bindables: [],
         properties: [{
           name: 'extraction_error',
-          value: error.message || 'Failed to extract controller info',
+          value: errorMessage(error) || 'Failed to extract controller info',
           type: 'string',
           canEdit: false,
           debugId: getNextDebugId()
@@ -3081,21 +3036,6 @@ export function install(debugValueLookup: Record<number, any>) {
 
     return null;
   }
-  function getValueFor(value) {
-    if (value instanceof Node) {
-      return value.constructor.name;
-    } else if (Array.isArray(value)) {
-      return `Array[${value.length}]`;
-    } else if (typeof value === "object") {
-      if (value.constructor) {
-        return value.constructor.name;
-      } else {
-        return "Object";
-      }
-    } else {
-      return value;
-    }
-  }
 
   function isMapLike(o) {
     if (!o || (typeof o !== "object" && typeof o !== "function")) {
@@ -3104,7 +3044,7 @@ export function install(debugValueLookup: Record<number, any>) {
     try {
       Map.prototype.has.call(o, undefined);
       return typeof o.size === "number" && typeof o.forEach === "function";
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -3116,7 +3056,7 @@ export function install(debugValueLookup: Record<number, any>) {
     try {
       Set.prototype.has.call(o, undefined);
       return typeof o.size === "number" && typeof o.forEach === "function";
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -3721,47 +3661,6 @@ export function install(debugValueLookup: Record<number, any>) {
     }
   }
 
-  function createControllerDebugInfo(controller) {
-    try {
-      let controllerDebugInfo: any = {
-        name:
-          controller.behavior.elementName || controller.behavior.attributeName,
-      };
-
-      let viewModel = controller.viewModel;
-      let bindableKeys = {};
-
-      controllerDebugInfo.bindables = controller.behavior.properties.map(
-        (x) => {
-          bindableKeys[x.name] = true;
-          return setValueOnDebugInfo(
-            {
-              name: x.name,
-              attribute: x.attribute,
-            },
-            viewModel[x.name],
-            viewModel
-          );
-        }
-      );
-
-      controllerDebugInfo.properties = getDebugPropertyKeys(viewModel)
-        .filter((x) => !(x in bindableKeys))
-        .map((x) => {
-          return setValueOnDebugInfo(
-            {
-              name: x,
-            },
-            viewModel[x],
-            viewModel
-          );
-        });
-
-      return controllerDebugInfo;
-    } catch (e) {
-      return createErrorObject(e);
-    }
-  }
 
   function convertBindingToDebugInfo(binding, blackList) {
     blackList = blackList || {};
@@ -3800,7 +3699,7 @@ export function install(debugValueLookup: Record<number, any>) {
             binding
           )
         );
-      } catch (e) {
+      } catch {
         properties.push({ name: key, type: 'error', value: 'unavailable' });
       }
     }
@@ -3824,64 +3723,13 @@ export function install(debugValueLookup: Record<number, any>) {
               obj[x],
               obj
             );
-          } catch (e) {
+          } catch {
             return { name: x, type: 'error', value: 'unavailable' };
           }
         }),
     };
   }
 
-  function getDebugInfoForNode(selectedNode) {
-    try {
-      var debugInfo: any = {};
-
-      nextDebugId = 0;
-
-      if (selectedNode.au) {
-        var au = selectedNode.au;
-
-        if (au.controller) {
-          debugInfo.customElement = createControllerDebugInfo(au.controller);
-        }
-
-        var tagName = selectedNode.tagName
-          ? selectedNode.tagName.toLowerCase()
-          : null;
-        var customAttributeNames = getDebugPropertyKeys(au).filter(function (
-          key
-        ) {
-          return key !== "controller" && key !== tagName;
-        });
-
-        if (customAttributeNames.length) {
-          debugInfo.customAttributes = customAttributeNames.map((x) =>
-            createControllerDebugInfo(au[x])
-          );
-        }
-      }
-
-      let owningView = findOwningViewOfNode(selectedNode);
-
-      if (owningView) {
-        if (owningView.bindingContext) {
-          debugInfo.bindingContext = convertObjectToDebugInfo(
-            owningView.bindingContext
-          );
-        }
-
-        if (owningView.overrideContext) {
-          debugInfo.overrideContext = convertObjectToDebugInfo(
-            owningView.overrideContext,
-            { bindingContext: true, parentOverrideContext: true }
-          );
-        }
-      }
-
-      return debugInfo;
-    } catch (e) {
-      return createErrorObject(e);
-    }
-  }
 
   function findOwningViewOfNode(node) {
     function moveUp(n) {
@@ -3907,11 +3755,6 @@ export function install(debugValueLookup: Record<number, any>) {
     );
   }
 
-  function updateValueForId(id, value) {
-    let debugInfo = debugValueLookup[id];
-    debugInfo.instance[debugInfo.name] = value;
-    setValueOnDebugInfo(debugInfo, value, debugInfo.instance);
-  }
 
   function getNextDebugId() {
     return ++nextDebugId;

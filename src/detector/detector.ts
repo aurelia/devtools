@@ -11,6 +11,12 @@ if (devtoolsDisabled) {
   (window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__ = null;
   (window as any).__AURELIA_DEVTOOLS_VERSION__ = null;
 } else {
+  // Reading lastError inside the callback stops Chrome logging
+  // "Unchecked runtime.lastError" when no DevTools page is listening
+  function ignoreLastError() {
+    void chrome.runtime.lastError;
+  }
+
   // Helper to set detection flags consistently
   function setDetected(version: 1 | 2) {
     if (applyDevtoolsOptOutState(window)) {
@@ -19,7 +25,9 @@ if (devtoolsDisabled) {
     (window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__ = version;
     (window as any).__AURELIA_DEVTOOLS_VERSION__ = version;
     (window as any).__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'detected';
-    try { chrome.runtime.sendMessage({ aureliaDetected: true, version }); } catch {}
+    try {
+      chrome.runtime.sendMessage({ aureliaDetected: true, version }, ignoreLastError);
+    } catch {}
   }
 
   // detects V1

@@ -20,3 +20,5 @@ chrome.runtime.onMessage.addListener((req, sender) => {
     });
   }
 });
+
+export {};

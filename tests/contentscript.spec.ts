@@ -98,7 +98,7 @@ describe('contentscript utilities', () => {
       const el = document.createElement('div') as any;
       el.$aurelia = { id: 'au2pref' };
       document.body.appendChild(el);
-      expect(getAureliaInstance(window)).toEqual({ id: 'au2pref' });
+      expect(getAureliaInstance()).toEqual({ id: 'au2pref' });
     });
 
     it('uses __AURELIA_DEVTOOLS_DETECTED_VERSION__ for v1', async () => {
@@ -107,7 +107,7 @@ describe('contentscript utilities', () => {
       const el = document.createElement('div') as any;
       el.au = { controller: { id: 'ctrlpref' } };
       document.body.appendChild(el);
-      expect(getAureliaInstance(window)).toEqual({ id: 'ctrlpref' });
+      expect(getAureliaInstance()).toEqual({ id: 'ctrlpref' });
     });
 
     it('uses __AURELIA_DEVTOOLS_VERSION__ when DETECTED_VERSION not set', async () => {
@@ -116,7 +116,7 @@ describe('contentscript utilities', () => {
       const el = document.createElement('div') as any;
       el.$aurelia = { id: 'au2-ver' };
       document.body.appendChild(el);
-      expect(getAureliaInstance(window)).toEqual({ id: 'au2-ver' });
+      expect(getAureliaInstance()).toEqual({ id: 'au2-ver' });
     });
 
     it('falls back to trying both when no version detected', async () => {
@@ -124,7 +124,7 @@ describe('contentscript utilities', () => {
       const el = document.createElement('div') as any;
       el.$aurelia = { id: 'fallback-v2' };
       document.body.appendChild(el);
-      expect(getAureliaInstance(window)).toEqual({ id: 'fallback-v2' });
+      expect(getAureliaInstance()).toEqual({ id: 'fallback-v2' });
     });
 
     it('falls back to v1 when v2 not found', async () => {
@@ -132,13 +132,13 @@ describe('contentscript utilities', () => {
       const el = document.createElement('div') as any;
       el.au = { controller: { id: 'fallback-v1' } };
       document.body.appendChild(el);
-      expect(getAureliaInstance(window)).toEqual({ id: 'fallback-v1' });
+      expect(getAureliaInstance()).toEqual({ id: 'fallback-v1' });
     });
 
     it('returns undefined when neither v1 nor v2 found', async () => {
       const { getAureliaInstance } = await import('@/contentscript/contentscript.ts');
       document.body.innerHTML = '<div></div>';
-      expect(getAureliaInstance(window)).toBeUndefined();
+      expect(getAureliaInstance()).toBeUndefined();
     });
   });
 
@@ -156,7 +156,7 @@ describe('contentscript utilities', () => {
       expect(sendMessageSpy).toHaveBeenCalledWith({
         type: 'au-devtools:interaction',
         entry: { id: 'evt-1', type: 'click' }
-      });
+      }, expect.any(Function));
     });
 
     it('forwards property-change events to chrome.runtime', async () => {
@@ -173,7 +173,7 @@ describe('contentscript utilities', () => {
         type: 'au-devtools:property-change',
         changes: [{ prop: 'a' }],
         snapshot: { ts: 1 }
-      });
+      }, expect.any(Function));
     });
 
     it('forwards tree-change events to chrome.runtime', async () => {
@@ -189,7 +189,7 @@ describe('contentscript utilities', () => {
       expect(sendMessageSpy).toHaveBeenCalledWith({
         type: 'au-devtools:tree-change',
         detail: { tree: [] }
-      });
+      }, expect.any(Function));
     });
 
     it('handles event with undefined detail gracefully', async () => {
@@ -203,7 +203,7 @@ describe('contentscript utilities', () => {
       expect(sendMessageSpy).toHaveBeenCalledWith({
         type: 'au-devtools:interaction',
         entry: null
-      });
+      }, expect.any(Function));
     });
   });
 });

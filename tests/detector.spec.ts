@@ -29,14 +29,14 @@ describe('detector.ts', () => {
     await importFresh();
     window.dispatchEvent(new Event('aurelia-composed'));
     expect((window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__).toBe(1);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ aureliaDetected: true, version: 1 });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ aureliaDetected: true, version: 1 }, expect.any(Function));
   });
 
   it('sets version 2 on au-started', async () => {
     await importFresh();
     window.dispatchEvent(new Event('au-started'));
     expect((window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__).toBe(2);
-    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ aureliaDetected: true, version: 2 });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ aureliaDetected: true, version: 2 }, expect.any(Function));
   });
 
   it('probeAfterLoad detects v1 via DOM', async () => {

@@ -1,4 +1,3 @@
-let detectedVersion = null;
 let elementsSidebarPane = null;
 let sidebarCreated = false;
 
@@ -45,7 +44,7 @@ function getHookSource(): Promise<string> {
 function installHooksIfAllowed() {
   // The hook bundle contains its own opt-out and already-installed guards;
   // the presence check just avoids re-evaluating the full script on every call
-  chrome.devtools.inspectedWindow.eval(HOOK_PRESENCE_CHECK, (installed) => {
+  chrome.devtools.inspectedWindow.eval<boolean>(HOOK_PRESENCE_CHECK, (installed) => {
     if (installed === true) return;
     getHookSource()
       .then((source) => {
@@ -156,7 +155,7 @@ function createElementsSidebar() {
         })()`;
         try {
           elementsSidebarPane.setExpression(expr, 'Aurelia');
-        } catch (e) {
+        } catch {
           elementsSidebarPane.setObject({ message: 'Unable to evaluate Aurelia info' }, 'Aurelia');
         }
       };
@@ -182,7 +181,6 @@ chrome.runtime.onMessage.addListener((req, sender) => {
   if (sender.tab && req.aureliaDetected && req.version) {
     chrome.devtools.inspectedWindow.eval(optOutCheckExpression, (disabled, isException) => {
       if (isException || disabled) return;
-      detectedVersion = req.version;
       updateDetectionState(req.version);
     });
   }
@@ -246,21 +244,19 @@ chrome.devtools.inspectedWindow.eval(
   })();
 `,
   (result: any, isException) => {
-    if (isException) {
+    if (isException || !result || result.status === 'disabled') {
       return;
-    } else if (result && result.status === 'disabled') {
-      detectedVersion = null;
-    } else if (result && result.status === 'detected' && result.version) {
-      detectedVersion = result.version;
+    }
+    if (result.status === 'detected' && result.version) {
       updateDetectionState(result.version);
-    } else if (sidebarCreated && result && result.status === 'not-found') {
+    } else if (sidebarCreated && result.status === 'not-found') {
       chrome.devtools.inspectedWindow.eval(`
         window.__AURELIA_DEVTOOLS_DETECTION_STATE__ = 'not-found';
       `);
     }
   }
 );
-chrome.runtime.onConnect.addListener((port) => {
+chrome.runtime.onConnect.addListener(() => {
   installHooksIfAllowed();
 });
 

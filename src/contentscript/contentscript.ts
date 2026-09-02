@@ -1,7 +1,14 @@
-chrome.runtime.connect({ name: 'content-connection' });
+function ignoreLastError() {
+  void chrome.runtime.lastError;
+}
+
+try {
+  const port = chrome.runtime.connect({ name: 'content-connection' });
+  port?.onDisconnect?.addListener(ignoreLastError);
+} catch {}
 
 // Version-aware function to get Aurelia instance
-export function getAureliaInstance(win): any | undefined {
+export function getAureliaInstance(): any | undefined {
   // First try to detect which version we're dealing with
   const detectedVersion =
     (window as any).__AURELIA_DEVTOOLS_DETECTED_VERSION__ ||
@@ -70,7 +77,7 @@ try {
       chrome.runtime.sendMessage({
         type: 'au-devtools:interaction',
         entry: event?.detail,
-      });
+      }, ignoreLastError);
     } catch {}
   });
 } catch {}
@@ -83,7 +90,7 @@ try {
         type: 'au-devtools:property-change',
         changes: event?.detail?.changes,
         snapshot: event?.detail?.snapshot,
-      });
+      }, ignoreLastError);
     } catch {}
   });
 } catch {}
@@ -95,7 +102,7 @@ try {
       chrome.runtime.sendMessage({
         type: 'au-devtools:tree-change',
         detail: event?.detail,
-      });
+      }, ignoreLastError);
     } catch {}
   });
 } catch {}

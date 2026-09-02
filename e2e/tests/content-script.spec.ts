@@ -19,6 +19,20 @@ test.describe('Content Script', () => {
     await page.close();
   });
 
+  test('injected scripts do not throw on the page', async ({ context }) => {
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    await page.goto('/');
+    await waitForPageLoad(page);
+    await page.waitForTimeout(1000);
+
+    expect(errors).toEqual([]);
+
+    await page.close();
+  });
+
   test('extension service worker is active', async ({ context, extensionId }) => {
     expect(extensionId).toBeTruthy();
     expect(extensionId.length).toBeGreaterThan(10);
