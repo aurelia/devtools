@@ -6,3 +6,4 @@ dist/*
 e2e/fixtures/aurelia-app/dist
 /playwright-report
 /test-results
+*.zip
